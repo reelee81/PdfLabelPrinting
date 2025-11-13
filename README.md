@@ -16,6 +16,21 @@ modify it and learn from it.
 
 (The detailed functionality is documented in the code itself; this README is intentionally short.)
 
+## Screenshots
+
+<p style="text-align: center;">
+  <img src="screenshots/main_screen_light.jpg" width="500" alt="Main screen (light theme)" />
+</p>
+
+<p style="text-align: center;">
+  <img src="screenshots/main_screen_dark.jpg" width="500" alt="Main screen (dark theme)" />
+</p>
+
+<p style="text-align: center;">
+  <img src="screenshots/signature_dialog.jpg" width="500" alt="Signature position dialog" />
+</p>
+
+
 ## Note on using signatures
 
 The signatures created with the application **do not qualify as qualified electronic signatures,
