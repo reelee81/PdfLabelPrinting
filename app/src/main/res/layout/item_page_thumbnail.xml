@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
+    android:orientation="vertical"
+    tools:ignore="SpUsage, RtlHardcoded">
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/page_number"
+        style="@style/PdfLabelPrinting.TextView.Thumb"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/dp_2" />
+
+    <FrameLayout
+        android:layout_width="@dimen/dp_112"
+        android:layout_height="@dimen/dp_158"
+        android:layout_marginBottom="@dimen/dp_2">
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/iv_thumbnail"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:contentDescription="@null" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/btn_delete"
+            android:layout_gravity="top|right"
+            android:layout_width="@dimen/dp_24"
+            android:layout_height="@dimen/dp_24"
+            android:background="@null"
+            android:contentDescription="@null"
+            android:layout_marginTop="@dimen/dp_1"
+            android:layout_marginRight="@dimen/dp_1"
+            app:srcCompat="@drawable/ic_close_24"
+            app:tintMode="src_in"
+            app:tint="@color/ic_delete_page_color" />
+
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/cb_select"
+            android:layout_gravity="bottom|left"
+            android:layout_width="@dimen/dp_24"
+            android:layout_height="@dimen/dp_24"
+            android:text=""
+            android:background="@null"
+            android:contentDescription="@null"
+            android:layout_marginLeft="@dimen/dp_2"
+            android:layout_marginBottom="@dimen/dp_2"
+            app:buttonTint="@color/ic_checkbox_page_color" />
+    </FrameLayout>
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/tv_size_label"
+        style="@style/PdfLabelPrinting.TextView.Thumb"
+        android:text="@string/tv_size_label_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/dp_10" />
+</LinearLayout>

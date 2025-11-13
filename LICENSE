@@ -1,0 +1,24 @@
+PdfLabelPrinting – PDF label printing app
+
+Copyright (C) 2025 <reelee81>
+
+This program is free software. You may redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License or (at your option)
+any later version.
+
+See https://www.gnu.org/licenses/agpl-3.0.html for the full license text.
+
+The software is distributed in the hope that it will be useful, but it is
+provided "AS IS", without any warranty, including without the implied
+warranties of merchantability or fitness for a particular purpose.
+
+If you did not receive a copy of the license together with this program,
+you can always find it at the URL above.
+
+Short summary (non‑binding):
+- you can use, study, modify and redistribute this app;
+- if you distribute it (for example on Google Play), you must also make
+  the full corresponding source code available under the AGPL-3.0-or-later;
+- if you make network services available based on this app, users of that
+  service must be able to obtain the corresponding source code as well.

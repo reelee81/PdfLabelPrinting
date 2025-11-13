@@ -1,0 +1,692 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    tools:ignore="SpUsage, RtlHardcoded"
+    tools:context=".MainActivity">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/dp_56"
+            app:title="@string/app_name" />
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/root_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingLeft="@dimen/dp_16"
+                android:paddingRight="@dimen/dp_16"
+                app:layout_constraintLeft_toLeftOf="parent"
+                app:layout_constraintRight_toRightOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintWidth_max="@dimen/dp_9999">
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_10">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/save_normal_pages"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:text="@string/normal_pages"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/save_load_simple_text_1"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread" />
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/save_load_simple_text_1"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="@string/save_load"
+                        android:gravity="center"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/save_normal_pages"
+                        app:layout_constraintRight_toLeftOf="@+id/load_normal_pages"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/load_normal_pages"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:text="@string/normal_pages"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/save_load_simple_text_1"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_10">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/save_label_pages"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:text="@string/label_pages"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/save_load_simple_text_2"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread" />
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/save_load_simple_text_2"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:text="@string/save_load"
+                        android:gravity="center"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/save_label_pages"
+                        app:layout_constraintRight_toLeftOf="@+id/load_label_pages"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/load_label_pages"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:text="@string/label_pages"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/save_load_simple_text_2"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_3">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/number_of_rows"
+                        android:hint="@string/row_column_batch_hint_text"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_40"
+                        android:inputType="number"
+                        android:maxLength="3"
+                        android:importantForAutofill="no"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/row_column_simple_text"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread" />
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/row_column_simple_text"
+                        android:text="@string/row_column"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/number_of_rows"
+                        app:layout_constraintRight_toLeftOf="@+id/number_of_columns"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/number_of_columns"
+                        android:hint="@string/row_column_batch_hint_text"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_40"
+                        android:inputType="number"
+                        android:maxLength="3"
+                        android:importantForAutofill="no"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/row_column_simple_text"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_3">
+
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/left_pair"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/scale_container"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/batch_page"
+                            android:hint="@string/row_column_batch_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginRight="@dimen/dp_2"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintRight_toLeftOf="@+id/batch_simple_text"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"
+                            app:layout_constraintHorizontal_chainStyle="spread"/>
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/batch_simple_text"
+                            android:text="@string/page_batch"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:textAlignment="textStart"
+                            android:layout_marginLeft="@dimen/dp_2"
+                            app:layout_constraintLeft_toRightOf="@id/batch_page"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+                    </androidx.constraintlayout.widget.ConstraintLayout>
+
+                    <FrameLayout
+                        android:id="@+id/scale_container"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/left_pair"
+                        app:layout_constraintRight_toLeftOf="@+id/right_pair"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1">
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/scale"
+                            android:text="@string/print_page_scale"
+                            android:layout_width="wrap_content"
+                            android:layout_height="@dimen/dp_48"
+                            android:layout_gravity="center"
+                            app:switchPadding="@dimen/dp_6"/>
+                    </FrameLayout>
+
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/right_pair"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/scale_container"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/border_simple_text"
+                            android:text="@string/margin"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:textAlignment="textEnd"
+                            android:layout_marginRight="@dimen/dp_2"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintRight_toLeftOf="@+id/margin"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/margin"
+                            android:hint="@string/margin_xy_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginLeft="@dimen/dp_2"
+                            app:layout_constraintLeft_toRightOf="@id/border_simple_text"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+                    </androidx.constraintlayout.widget.ConstraintLayout>
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_3">
+
+                    <RadioGroup
+                        android:id="@+id/radio_group"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="left|center_vertical"
+                        android:layout_marginRight="@dimen/dp_4"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/drawframe_container"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="2"
+                        app:layout_constraintHorizontal_chainStyle="spread">
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/portrait"
+                            android:text="@string/portrait"
+                            android:layout_width="wrap_content"
+                            android:layout_height="@dimen/dp_48"
+                            android:layout_marginRight="@dimen/dp_16"/>
+
+                        <com.google.android.material.radiobutton.MaterialRadioButton
+                            android:id="@+id/landscape"
+                            android:text="@string/landscape"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_48"
+                            android:layout_weight="1" />
+                    </RadioGroup>
+
+                    <FrameLayout
+                        android:id="@+id/drawframe_container"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="@dimen/dp_4"
+                        app:layout_constraintLeft_toRightOf="@id/radio_group"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1">
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/drawframe"
+                            android:text="@string/print_page_border"
+                            android:layout_width="wrap_content"
+                            android:layout_height="@dimen/dp_48"
+                            android:layout_gravity="left|center_vertical"
+                            app:switchPadding="@dimen/dp_6" />
+                    </FrameLayout>
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_10">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/add_signature"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:text="@string/select_signature"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/add_simple_text"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread" />
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/add_simple_text"
+                        android:text="@string/add"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/add_signature"
+                        app:layout_constraintRight_toLeftOf="@+id/empty_page"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/empty_page"
+                        android:text="@string/empty_page"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/add_simple_text"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="@dimen/dp_12">
+
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/left_xy_pair"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toLeftOf="parent"
+                        app:layout_constraintRight_toLeftOf="@+id/xy_add_simple_text"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1"
+                        app:layout_constraintHorizontal_chainStyle="spread">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/signature_position_x"
+                            android:hint="@string/margin_xy_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginRight="@dimen/dp_2"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintRight_toLeftOf="@+id/signature_position_y"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1" />
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/signature_position_y"
+                            android:hint="@string/margin_xy_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginLeft="@dimen/dp_2"
+                            app:layout_constraintLeft_toRightOf="@id/signature_position_x"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1" />
+                    </androidx.constraintlayout.widget.ConstraintLayout>
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/xy_add_simple_text"
+                        android:text="@string/xy_add"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        android:layout_marginRight="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/left_xy_pair"
+                        app:layout_constraintRight_toLeftOf="@+id/select_pdf"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/select_pdf"
+                        android:text="@string/select_file"
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/dp_44"
+                        android:layout_marginLeft="@dimen/dp_2"
+                        app:layout_constraintLeft_toRightOf="@id/xy_add_simple_text"
+                        app:layout_constraintRight_toRightOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintHorizontal_weight="1" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:background="@color/bitmap_tv_background_color"
+                    android:layout_marginBottom="@dimen/dp_105">
+
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/toolbar_row"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/dp_4"
+                        android:layout_marginBottom="@dimen/dp_4">
+
+                        <com.google.android.material.checkbox.MaterialCheckBox
+                            android:id="@+id/all_select"
+                            android:layout_width="@dimen/dp_24"
+                            android:layout_height="@dimen/dp_24"
+                            android:text=""
+                            android:background="@null"
+                            android:contentDescription="@null"
+                            android:layout_marginLeft="@dimen/dp_4"
+                            app:buttonTint="@color/ic_checkbox_all_color"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"/>
+
+                        <androidx.appcompat.widget.AppCompatImageButton
+                            android:id="@+id/list_start"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_24"
+                            android:background="@null"
+                            android:scaleType="center"
+                            android:contentDescription="@null"
+                            app:srcCompat="@drawable/ic_start_24"
+                            app:tintMode="src_in"
+                            app:tint="@color/ic_delete_all_color"
+                            app:layout_constraintLeft_toRightOf="@id/all_select"
+                            app:layout_constraintRight_toLeftOf="@id/list_end"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"
+                            app:layout_constraintHorizontal_chainStyle="spread" />
+
+                        <androidx.appcompat.widget.AppCompatImageButton
+                            android:id="@+id/list_end"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_24"
+                            android:background="@null"
+                            android:scaleType="center"
+                            android:contentDescription="@null"
+                            app:srcCompat="@drawable/ic_end_24"
+                            app:tintMode="src_in"
+                            app:tint="@color/ic_delete_all_color"
+                            app:layout_constraintLeft_toRightOf="@id/list_start"
+                            app:layout_constraintRight_toLeftOf="@id/delete_select"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1" />
+
+                        <androidx.appcompat.widget.AppCompatImageButton
+                            android:id="@+id/delete_select"
+                            android:layout_width="@dimen/dp_24"
+                            android:layout_height="@dimen/dp_24"
+                            android:background="@null"
+                            android:contentDescription="@null"
+                            android:layout_marginRight="@dimen/dp_4"
+                            app:srcCompat="@drawable/ic_delete_24"
+                            app:tintMode="src_in"
+                            app:tint="@color/ic_delete_all_color"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"/>
+                    </androidx.constraintlayout.widget.ConstraintLayout>
+
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/rv_thumbnails"
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/dp_420"
+                        android:gravity="center"
+                        android:nestedScrollingEnabled="true"
+                        android:clipToPadding="false"
+                        android:paddingLeft="@dimen/dp_14"
+                        android:paddingRight="@dimen/dp_14"
+                        android:paddingTop="@dimen/dp_2"
+                        android:paddingBottom="@dimen/dp_15" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:background="@color/app_background_color"
+            android:paddingLeft="@dimen/dp_16"
+            android:paddingRight="@dimen/dp_16"
+            android:paddingBottom="@dimen/dp_8"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999">
+
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/dp_3">
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/password_out_text"
+                    android:text="@string/password_out_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:layout_constraintLeft_toLeftOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent" />
+
+                <com.google.android.material.checkbox.MaterialCheckBox
+                    android:id="@+id/password_out"
+                    android:layout_width="@dimen/dp_24"
+                    android:layout_height="@dimen/dp_24"
+                    android:text=""
+                    android:visibility="visible"
+                    android:background="@null"
+                    android:contentDescription="@null"
+                    app:buttonTint="@color/ic_checkbox_password_color"
+                    app:layout_constraintLeft_toRightOf="@id/password_out_text"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    android:layout_marginLeft="@dimen/dp_8" />
+
+                <androidx.appcompat.widget.AppCompatImageButton
+                    android:id="@+id/add_time"
+                    android:layout_width="@dimen/dp_24"
+                    android:layout_height="@dimen/dp_24"
+                    android:background="@null"
+                    android:contentDescription="@null"
+                    app:srcCompat="@drawable/ic_add_24"
+                    app:tintMode="src_in"
+                    app:tint="@color/ic_custom_icon_color"
+                    app:layout_constraintLeft_toRightOf="@id/password_out"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    android:layout_marginLeft="@dimen/dp_8" />
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/file_name"
+                    style="@style/PdfLabelPrinting.EditText.Filename"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/dp_50"
+                    android:importantForAutofill="no"
+                    app:layout_constraintLeft_toRightOf="@id/add_time"
+                    app:layout_constraintRight_toLeftOf="@+id/file_type_simple_text"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/file_type_simple_text"
+                    android:text="@string/file_type_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginLeft="@dimen/dp_2"
+                    android:layout_marginBottom="@dimen/dp_10"
+                    app:layout_constraintLeft_toRightOf="@id/file_name"
+                    app:layout_constraintRight_toRightOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
+
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/print_pdf"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/dp_44"
+                    android:text="@string/print"
+                    android:layout_marginRight="@dimen/dp_8"
+                    app:layout_constraintLeft_toLeftOf="parent"
+                    app:layout_constraintRight_toLeftOf="@+id/save_pdf_file"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintHorizontal_weight="1"
+                    app:layout_constraintHorizontal_chainStyle="spread" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/save_pdf_file"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/dp_44"
+                    android:text="@string/save_pdf_file"
+                    android:layout_marginLeft="@dimen/dp_8"
+                    android:layout_marginRight="@dimen/dp_8"
+                    app:layout_constraintLeft_toRightOf="@id/print_pdf"
+                    app:layout_constraintRight_toLeftOf="@+id/send_pdf"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintHorizontal_weight="1" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/send_pdf"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/dp_44"
+                    android:text="@string/send"
+                    android:layout_marginLeft="@dimen/dp_8"
+                    app:layout_constraintLeft_toRightOf="@id/save_pdf_file"
+                    app:layout_constraintRight_toRightOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintHorizontal_weight="1" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

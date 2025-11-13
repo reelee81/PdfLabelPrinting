@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
+    android:orientation="horizontal"
+    android:padding="@dimen/dp_16"
+    tools:ignore="SpUsage, RtlHardcoded">
+
+    <com.google.android.material.progressindicator.CircularProgressIndicator
+        android:layout_width="@dimen/dp_48"
+        android:layout_height="@dimen/dp_48"
+        android:indeterminate="true"
+        app:indicatorSize="@dimen/dp_48"
+        app:trackThickness="@dimen/dp_3"/>
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/progress_bar_simple_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="@dimen/dp_14"
+        android:textColor="@color/progress_info_text_color"
+        android:layout_marginLeft="@dimen/dp_14" />
+</LinearLayout>
