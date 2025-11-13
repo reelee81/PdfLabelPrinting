@@ -51,7 +51,7 @@ The entire project (unless otherwise noted) is available under the terms of the
 > **GNU Affero General Public License 3.0 or later**  
 > (`AGPL-3.0-or-later`)
 
-- A summary of the license is contained in the `LICENSE` and `NOTICE.md` files.
+- A summary of the license is contained in the `LICENSE` and `NOTICE` files.
 - The most important external dependencies and their licenses: `THIRD_PARTY_LICENSES.md`.
 
 **Important:** the application uses the iText Core for Android (9.x) library,
