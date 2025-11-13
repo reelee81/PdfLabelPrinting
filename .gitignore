@@ -1,0 +1,26 @@
+# Gradle / build
+.gradle/
+build/
+app/build/
+.externalNativeBuild/
+.cxx/
+
+# Local config
+local.properties
+
+# IDE
+*.iml
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android
+captures/
+
+# Keystore / certificates (VERY IMPORTANT)
+*.jks
+*.keystore
+*.pem
+*.p12
