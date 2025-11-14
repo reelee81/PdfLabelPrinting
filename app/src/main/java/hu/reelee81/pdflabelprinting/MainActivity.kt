@@ -3109,9 +3109,9 @@ class MainActivity : AppCompatActivity() {
                 val header = ByteArray(8)
                 if (fis.read(header) == 8) {
                     header[0] == 0x89.toByte() &&
-                            header[1] == 0x50.toByte() && // P
-                            header[2] == 0x4E.toByte() && // N
-                            header[3] == 0x47.toByte() && // G
+                            header[1] == 0x50.toByte() &&
+                            header[2] == 0x4E.toByte() &&
+                            header[3] == 0x47.toByte() &&
                             header[4] == 0x0D.toByte() &&
                             header[5] == 0x0A.toByte() &&
                             header[6] == 0x1A.toByte() &&
@@ -3285,7 +3285,6 @@ class MainActivity : AppCompatActivity() {
                 }.onFailure {
                     runCatching {
                         val fallback = AppCompatResources.getDrawable(context, R.drawable.ic_visibility_off_24)?.mutate()
-                        // setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, fallback, null) // őőő
                         setCompoundDrawablesWithIntrinsicBounds(null, null, fallback, null)
                         refreshDrawableState()
                         invalidate()
