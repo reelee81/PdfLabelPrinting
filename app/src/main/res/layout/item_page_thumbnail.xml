@@ -28,6 +28,19 @@
             android:contentDescription="@null" />
 
         <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/btn_rotate"
+            android:layout_gravity="top|left"
+            android:layout_width="@dimen/dp_24"
+            android:layout_height="@dimen/dp_24"
+            android:background="@null"
+            android:contentDescription="@null"
+            android:layout_marginTop="@dimen/dp_1"
+            android:layout_marginLeft="@dimen/dp_1"
+            app:srcCompat="@drawable/ic_rotate_left_24"
+            app:tintMode="src_in"
+            app:tint="@color/ic_delete_rotate_page_color" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
             android:id="@+id/btn_delete"
             android:layout_gravity="top|right"
             android:layout_width="@dimen/dp_24"
@@ -38,7 +51,7 @@
             android:layout_marginRight="@dimen/dp_1"
             app:srcCompat="@drawable/ic_close_24"
             app:tintMode="src_in"
-            app:tint="@color/ic_delete_page_color" />
+            app:tint="@color/ic_delete_rotate_page_color" />
 
         <com.google.android.material.checkbox.MaterialCheckBox
             android:id="@+id/cb_select"

@@ -10,7 +10,9 @@
     <string name="save_pdf_file">SAVE</string>
     <string name="send">SEND</string>
     <string name="save_load">Save / Load</string>
-    <string name="row_column">Row / Column</string>
+    <string name="row">Row</string>
+    <string name="column">Column</string>
+    <string name="fit">Fit</string>
     <string name="margin">Margin</string>
     <string name="add">Add</string>
     <string name="xy_add">XY / Add</string>
@@ -63,6 +65,7 @@
     <string name="failed_to_build_pages_with_msg">Failed to build pages: %1$s</string>
     <string name="failed_to_add_empty_page_with_msg">Failed to add empty page: %1$s</string>
     <string name="failed_to_delete_selected_groups_with_msg">Failed to delete selected groups: %1$s</string>
+    <string name="failed_to_rotate_selected_groups_with_msg">Failed to rotate selected groups: %1$s</string>
     <string name="failed_to_delete_signature">Failed to delete signature</string>
     <string name="signature_image_invalid">Signature image not found/invalid</string>
     <string name="enter_value_0_100">Enter a value between 0 and 100 (mm)</string>

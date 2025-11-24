@@ -139,50 +139,108 @@
                     android:layout_height="wrap_content"
                     android:layout_marginBottom="@dimen/dp_3">
 
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/number_of_rows"
-                        android:hint="@string/row_column_batch_hint_text"
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/left_rc_pair"
                         android:layout_width="0dp"
-                        android:layout_height="@dimen/dp_40"
-                        android:inputType="number"
-                        android:maxLength="3"
-                        android:importantForAutofill="no"
+                        android:layout_height="wrap_content"
                         android:layout_marginRight="@dimen/dp_2"
                         app:layout_constraintLeft_toLeftOf="parent"
-                        app:layout_constraintRight_toLeftOf="@+id/row_column_simple_text"
+                        app:layout_constraintRight_toLeftOf="@+id/scale_container"
                         app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
                         app:layout_constraintHorizontal_weight="1"
-                        app:layout_constraintHorizontal_chainStyle="spread" />
+                        app:layout_constraintHorizontal_chainStyle="spread">
 
-                    <com.google.android.material.textview.MaterialTextView
-                        android:id="@+id/row_column_simple_text"
-                        android:text="@string/row_column"
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/number_of_rows"
+                            android:hint="@string/row_column_batch_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginRight="@dimen/dp_2"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintRight_toLeftOf="@+id/row_simple_text"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"
+                            app:layout_constraintHorizontal_chainStyle="spread"/>
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/row_simple_text"
+                            android:text="@string/row"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:textAlignment="textStart"
+                            android:layout_marginLeft="@dimen/dp_2"
+                            app:layout_constraintLeft_toRightOf="@id/number_of_rows"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+                    </androidx.constraintlayout.widget.ConstraintLayout>
+
+                    <FrameLayout
+                        android:id="@+id/scale_container"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:gravity="center"
                         android:layout_marginLeft="@dimen/dp_2"
                         android:layout_marginRight="@dimen/dp_2"
-                        app:layout_constraintLeft_toRightOf="@id/number_of_rows"
-                        app:layout_constraintRight_toLeftOf="@+id/number_of_columns"
+                        app:layout_constraintLeft_toRightOf="@id/left_rc_pair"
+                        app:layout_constraintRight_toLeftOf="@+id/right_rc_pair"
                         app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
-                        app:layout_constraintHorizontal_weight="1" />
+                        app:layout_constraintHorizontal_weight="1">
 
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/number_of_columns"
-                        android:hint="@string/row_column_batch_hint_text"
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/scale"
+                            android:text="@string/print_page_scale"
+                            android:layout_width="wrap_content"
+                            android:layout_height="@dimen/dp_48"
+                            android:layout_gravity="center"
+                            app:switchPadding="@dimen/dp_6"/>
+                    </FrameLayout>
+
+                    <androidx.constraintlayout.widget.ConstraintLayout
+                        android:id="@+id/right_rc_pair"
                         android:layout_width="0dp"
-                        android:layout_height="@dimen/dp_40"
-                        android:inputType="number"
-                        android:maxLength="3"
-                        android:importantForAutofill="no"
+                        android:layout_height="wrap_content"
                         android:layout_marginLeft="@dimen/dp_2"
-                        app:layout_constraintLeft_toRightOf="@id/row_column_simple_text"
+                        app:layout_constraintLeft_toRightOf="@id/scale_container"
                         app:layout_constraintRight_toRightOf="parent"
                         app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
-                        app:layout_constraintHorizontal_weight="1" />
+                        app:layout_constraintHorizontal_weight="1">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/column_simple_text"
+                            android:text="@string/column"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:textAlignment="textEnd"
+                            android:layout_marginRight="@dimen/dp_2"
+                            app:layout_constraintLeft_toLeftOf="parent"
+                            app:layout_constraintRight_toLeftOf="@+id/number_of_columns"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/number_of_columns"
+                            android:hint="@string/row_column_batch_hint_text"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_40"
+                            android:inputType="number"
+                            android:maxLength="3"
+                            android:importantForAutofill="no"
+                            android:layout_marginLeft="@dimen/dp_2"
+                            app:layout_constraintLeft_toRightOf="@id/column_simple_text"
+                            app:layout_constraintRight_toRightOf="parent"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1"/>
+                    </androidx.constraintlayout.widget.ConstraintLayout>
                 </androidx.constraintlayout.widget.ConstraintLayout>
 
                 <androidx.constraintlayout.widget.ConstraintLayout
@@ -196,7 +254,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginRight="@dimen/dp_2"
                         app:layout_constraintLeft_toLeftOf="parent"
-                        app:layout_constraintRight_toLeftOf="@+id/scale_container"
+                        app:layout_constraintRight_toLeftOf="@+id/fit_container"
                         app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
                         app:layout_constraintHorizontal_weight="1"
@@ -233,7 +291,7 @@
                     </androidx.constraintlayout.widget.ConstraintLayout>
 
                     <FrameLayout
-                        android:id="@+id/scale_container"
+                        android:id="@+id/fit_container"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginLeft="@dimen/dp_2"
@@ -245,8 +303,8 @@
                         app:layout_constraintHorizontal_weight="1">
 
                         <com.google.android.material.switchmaterial.SwitchMaterial
-                            android:id="@+id/scale"
-                            android:text="@string/print_page_scale"
+                            android:id="@+id/fit"
+                            android:text="@string/fit"
                             android:layout_width="wrap_content"
                             android:layout_height="@dimen/dp_48"
                             android:layout_gravity="center"
@@ -258,7 +316,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginLeft="@dimen/dp_2"
-                        app:layout_constraintLeft_toRightOf="@id/scale_container"
+                        app:layout_constraintLeft_toRightOf="@id/fit_container"
                         app:layout_constraintRight_toRightOf="parent"
                         app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
@@ -506,13 +564,27 @@
                             android:contentDescription="@null"
                             app:srcCompat="@drawable/ic_start_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_all_color"
+                            app:tint="@color/ic_delete_rotate_all_color"
                             app:layout_constraintLeft_toRightOf="@id/all_select"
-                            app:layout_constraintRight_toLeftOf="@id/list_end"
+                            app:layout_constraintRight_toLeftOf="@+id/rotate_select"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"
                             app:layout_constraintHorizontal_weight="1"
                             app:layout_constraintHorizontal_chainStyle="spread" />
+
+                        <androidx.appcompat.widget.AppCompatImageButton
+                            android:id="@+id/rotate_select"
+                            android:layout_width="@dimen/dp_24"
+                            android:layout_height="@dimen/dp_24"
+                            android:background="@null"
+                            android:contentDescription="@null"
+                            app:srcCompat="@drawable/ic_rotate_left_24"
+                            app:tintMode="src_in"
+                            app:tint="@color/ic_delete_rotate_all_color"
+                            app:layout_constraintLeft_toRightOf="@id/list_start"
+                            app:layout_constraintRight_toLeftOf="@+id/list_end"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"/>
 
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/list_end"
@@ -523,8 +595,8 @@
                             android:contentDescription="@null"
                             app:srcCompat="@drawable/ic_end_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_all_color"
-                            app:layout_constraintLeft_toRightOf="@id/list_start"
+                            app:tint="@color/ic_delete_rotate_all_color"
+                            app:layout_constraintLeft_toRightOf="@+id/rotate_select"
                             app:layout_constraintRight_toLeftOf="@id/delete_select"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"
@@ -539,7 +611,7 @@
                             android:layout_marginRight="@dimen/dp_4"
                             app:srcCompat="@drawable/ic_delete_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_all_color"
+                            app:tint="@color/ic_delete_rotate_all_color"
                             app:layout_constraintRight_toRightOf="parent"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"/>

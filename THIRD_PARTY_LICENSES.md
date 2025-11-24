@@ -16,7 +16,7 @@ the **Apache License 2.0**:
 - `androidx.core:core-ktx:1.17.0`
 - `androidx.appcompat:appcompat:1.7.1`
 - `com.google.android.material:material:1.13.0`
-- `androidx.activity:activity:1.11.0`
+- `androidx.activity:activity:1.12.0`
 - `androidx.constraintlayout:constraintlayout:2.2.1`
 
 Many additional transitive AndroidX modules may also be pulled in at build time.
@@ -39,12 +39,12 @@ Reference: <https://developer.android.com/media/grow/implement-pdf-viewer>
 
 ## iText Core for Android (AGPL-3.0)
 
-The app uses **iText Core for Android 9.3.0** via the following modules:
+The app uses **iText Core for Android 9.4.0** via the following modules:
 
-- `com.itextpdf.android:kernel-android:9.3.0`
-- `com.itextpdf.android:layout-android:9.3.0`
-- `com.itextpdf.android:bouncy-castle-adapter-android:9.3.0`
-- `com.itextpdf.android:bouncy-castle-connector-android:9.3.0`
+- `com.itextpdf.android:kernel-android:9.4.0`
+- `com.itextpdf.android:layout-android:9.4.0`
+- `com.itextpdf.android:bouncy-castle-adapter-android:9.4.0`
+- `com.itextpdf.android:bouncy-castle-connector-android:9.4.0`
 
 These libraries are licensed under the **GNU Affero General Public License v3**,
 or can be used under a separate commercial license purchased from iText.

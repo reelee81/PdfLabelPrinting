@@ -108,6 +108,7 @@ import com.itextpdf.kernel.colors.ColorConstants
 import com.itextpdf.kernel.exceptions.BadPasswordException
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
+import com.itextpdf.kernel.geom.Vector
 import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.EncryptionConstants
 import com.itextpdf.kernel.pdf.PdfDocument
@@ -117,6 +118,13 @@ import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.ReaderProperties
 import com.itextpdf.kernel.pdf.WriterProperties
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
+import com.itextpdf.kernel.pdf.canvas.parser.EventType
+import com.itextpdf.kernel.pdf.canvas.parser.PdfCanvasProcessor
+import com.itextpdf.kernel.pdf.canvas.parser.data.IEventData
+import com.itextpdf.kernel.pdf.canvas.parser.data.ImageRenderInfo
+import com.itextpdf.kernel.pdf.canvas.parser.data.PathRenderInfo
+import com.itextpdf.kernel.pdf.canvas.parser.data.TextRenderInfo
+import com.itextpdf.kernel.pdf.canvas.parser.listener.IEventListener
 import org.xmlpull.v1.XmlPullParser
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
@@ -170,6 +178,9 @@ class MainActivity : AppCompatActivity() {
         const val KEY_SCALE = "scale"
         const val KEY_NORMAL_SCALE = "normal_scale"
         const val KEY_LABEL_SCALE = "label_scale"
+        const val KEY_FIT = "fit"
+        const val KEY_NORMAL_FIT = "normal_fit"
+        const val KEY_LABEL_FIT = "label_fit"
         const val KEY_BATCH_PAGE = "batch_page"
         const val KEY_NORMAL_BATCH_PAGE = "normal_batch_page"
         const val KEY_LABEL_BATCH_PAGE = "label_batch_page"
@@ -225,6 +236,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var landscape: MaterialRadioButton
     private lateinit var drawFrameSwitch: SwitchMaterial
     private lateinit var scaleSwitch: SwitchMaterial
+    private lateinit var fitSwitch: SwitchMaterial
     private lateinit var listStartButton: AppCompatImageButton
     private lateinit var listEndButton: AppCompatImageButton
     private lateinit var saveDocumentLauncher: ActivityResultLauncher<Intent>
@@ -264,7 +276,8 @@ class MainActivity : AppCompatActivity() {
         val marginMm: Int,
         val isLandscape: Boolean,
         val drawFrame: Boolean,
-        val scaleIndividually: Boolean
+        val scaleIndividually: Boolean,
+        val fitIndividually: Boolean
     )
     private var lastBuiltNupConfig: NupConfig? = null
 
@@ -421,6 +434,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         scaleSwitch = findViewById(R.id.scale)
+        fitSwitch = findViewById(R.id.fit)
+        fitSwitch.isEnabled = scaleSwitch.isChecked
 
         signaturePosX = findViewById(R.id.signature_position_x)
         signaturePosY = findViewById(R.id.signature_position_y)
@@ -442,7 +457,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         drawFrameSwitch.setOnCheckedChangeListener { _, _ -> maybeRegeneratePlpOnSettingChange() }
-        scaleSwitch.setOnCheckedChangeListener { _, _ -> maybeRegeneratePlpOnSettingChange() }
+        scaleSwitch.setOnCheckedChangeListener { _, isChecked ->
+            fitSwitch.isEnabled = isChecked
+            maybeRegeneratePlpOnSettingChange()
+        }
+        fitSwitch.setOnCheckedChangeListener { _, _ -> maybeRegeneratePlpOnSettingChange() }
 
         setupRegenerateOnBlur(numberOfRows)
         setupRegenerateOnBlur(numberOfColumns)
@@ -537,6 +556,7 @@ class MainActivity : AppCompatActivity() {
         adapter = ThumbnailAdapter(
             pageItems,
             deleteListener = { pos -> deletePlpPageGroupAndMirrorSource(pos) },
+            rotateListener = { pos -> rotatePlpPageGroupAndMirrorSource(pos) },
             clickListener = { _ -> openPdfWithDriveOrOther() },
             selectionChanged = { _, _ -> updateButtonsState() }
         )
@@ -2347,6 +2367,9 @@ class MainActivity : AppCompatActivity() {
             putBoolean(KEY_SCALE, false)
             putBoolean(KEY_NORMAL_SCALE, false)
             putBoolean(KEY_LABEL_SCALE, true)
+            putBoolean(KEY_FIT, false)
+            putBoolean(KEY_NORMAL_FIT, false)
+            putBoolean(KEY_LABEL_FIT, false)
             putString(KEY_MARGIN, "0")
             putString(KEY_NORMAL_MARGIN, "0")
             putString(KEY_LABEL_MARGIN, "2")
@@ -2392,6 +2415,7 @@ class MainActivity : AppCompatActivity() {
             val sigX = signaturePosX.text.toString()
             val sigY = signaturePosY.text.toString()
             val scale = scaleSwitch.isChecked
+            val fit = fitSwitch.isChecked
             val fileNameTemplate = fileNameEt.text?.toString() ?: ""
             val batchVal = batchPage.text.toString()
             val passwordOutChecked = passwordOutCb.isChecked
@@ -2406,6 +2430,7 @@ class MainActivity : AppCompatActivity() {
                     putString(KEY_NORMAL_SIG_POS_X, sigX)
                     putString(KEY_NORMAL_SIG_POS_Y, sigY)
                     putBoolean(KEY_NORMAL_SCALE, scale)
+                    putBoolean(KEY_NORMAL_FIT, fit)
                     putString(KEY_NORMAL_BATCH_PAGE, batchVal)
                     putBoolean(KEY_NORMAL_PASSWORD_OUT, passwordOutChecked)
                     putString(KEY_NORMAL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -2419,6 +2444,7 @@ class MainActivity : AppCompatActivity() {
                     putString(KEY_LABEL_SIG_POS_X, sigX)
                     putString(KEY_LABEL_SIG_POS_Y, sigY)
                     putBoolean(KEY_LABEL_SCALE, scale)
+                    putBoolean(KEY_LABEL_FIT, fit)
                     putString(KEY_LABEL_BATCH_PAGE, batchVal)
                     putBoolean(KEY_LABEL_PASSWORD_OUT, passwordOutChecked)
                     putString(KEY_LABEL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -2432,6 +2458,7 @@ class MainActivity : AppCompatActivity() {
             putString(KEY_SIG_POS_X, sigX)
             putString(KEY_SIG_POS_Y, sigY)
             putBoolean(KEY_SCALE, scale)
+            putBoolean(KEY_FIT, fit)
             putString(KEY_BATCH_PAGE, batchVal)
             putBoolean(KEY_PASSWORD_OUT, passwordOutChecked)
             putString(KEY_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -2451,6 +2478,7 @@ class MainActivity : AppCompatActivity() {
             putString(KEY_SIG_POS_X, signaturePosX.text.toString())
             putString(KEY_SIG_POS_Y, signaturePosY.text.toString())
             putBoolean(KEY_SCALE, scaleSwitch.isChecked)
+            putBoolean(KEY_FIT, fitSwitch.isChecked)
             putString(KEY_BATCH_PAGE, batchPage.text.toString())
             putBoolean(KEY_PASSWORD_OUT, passwordOutCb.isChecked)
             putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
@@ -2468,6 +2496,7 @@ class MainActivity : AppCompatActivity() {
         val sigX = prefs.getString(KEY_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()
         val sigY = prefs.getString(KEY_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()
         val scale = prefs.getBoolean(KEY_SCALE, false)
+        val fit = prefs.getBoolean(KEY_FIT, false)
         val batchVal = prefs.getString(KEY_BATCH_PAGE, "20") ?: "20"
         val passwordOutChecked = prefs.getBoolean(KEY_PASSWORD_OUT, false)
 
@@ -2482,7 +2511,8 @@ class MainActivity : AppCompatActivity() {
         batchPage.setText(batchVal)
         passwordOutCb.isChecked = passwordOutChecked
         scaleSwitch.isChecked = scale
-
+        fitSwitch.isChecked = fit
+        fitSwitch.isEnabled = scaleSwitch.isChecked
 
         val fileNameEt: EditText = findViewById(R.id.file_name)
         val defaultTemplate = getString(R.string.default_tmpl_normal)
@@ -2528,6 +2558,7 @@ class MainActivity : AppCompatActivity() {
                         "nlSigPosX" to (prefs.getString(KEY_NORMAL_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()),
                         "nlSigPosY" to (prefs.getString(KEY_NORMAL_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()),
                         "nlScale" to prefs.getBoolean(KEY_NORMAL_SCALE, false),
+                        "nlFit" to prefs.getBoolean(KEY_NORMAL_FIT, false),
                         "nlBatchPage" to (prefs.getString(KEY_NORMAL_BATCH_PAGE, "20") ?: "20"),
                         "nlPasswordOut" to prefs.getBoolean(KEY_NORMAL_PASSWORD_OUT, false),
                         "nlFileNameTemplate" to (prefs.getString(KEY_NORMAL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal)) ?: getString(R.string.default_tmpl_normal))
@@ -2541,6 +2572,7 @@ class MainActivity : AppCompatActivity() {
                         "nlSigPosX" to (prefs.getString(KEY_LABEL_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()),
                         "nlSigPosY" to (prefs.getString(KEY_LABEL_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()),
                         "nlScale" to prefs.getBoolean(KEY_LABEL_SCALE, true),
+                        "nlFit" to prefs.getBoolean(KEY_LABEL_FIT, false),
                         "nlBatchPage" to (prefs.getString(KEY_LABEL_BATCH_PAGE, "20") ?: "20"),
                         "nlPasswordOut" to prefs.getBoolean(KEY_LABEL_PASSWORD_OUT, false),
                         "nlFileNameTemplate" to (prefs.getString(KEY_LABEL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_label)) ?: getString(R.string.default_tmpl_label))
@@ -2559,6 +2591,8 @@ class MainActivity : AppCompatActivity() {
             signaturePosX.setText(data["nlSigPosX"] as String)
             signaturePosY.setText(data["nlSigPosY"] as String)
             scaleSwitch.isChecked = data["nlScale"] as Boolean
+            fitSwitch.isChecked = data["nlFit"] as Boolean
+            fitSwitch.isEnabled = scaleSwitch.isChecked
             batchPage.setText(data["nlBatchPage"] as String)
             passwordOutCb.isChecked = data["nlPasswordOut"] as Boolean
 
@@ -2768,6 +2802,16 @@ class MainActivity : AppCompatActivity() {
         deleteBtn.isEnabled   = hasPages && hasSelection
         deleteBtn.isActivated = hasSelection
 
+        val rotateBtn = findViewById<AppCompatImageButton>(R.id.rotate_select)
+        if (rotateBtn.getTag(R.id.rotate_select) != true) {
+            rotateBtn.setOnClickListener {
+                rotateSelectedPlpGroups()
+            }
+            rotateBtn.setTag(R.id.rotate_select, true)
+        }
+        rotateBtn.isEnabled   = hasPages && hasSelection
+        rotateBtn.isActivated = hasSelection
+
         fastScroller?.setEnabledWhen(hasPages)
 
         val shouldNotify = (lastGlobalAllSelected == null || lastGlobalAllSelected != allChecked)
@@ -2840,7 +2884,8 @@ class MainActivity : AppCompatActivity() {
         val isLand = landscape.isChecked
         val drawFrame = drawFrameSwitch.isChecked
         val scaleInd = scaleSwitch.isChecked
-        return NupConfig(rows, cols, marginMm, isLand, drawFrame, scaleInd)
+        val fitInd = fitSwitch.isChecked
+        return NupConfig(rows, cols, marginMm, isLand, drawFrame, scaleInd, fitInd)
     }
 
     private fun nupConfigChanged(): Boolean {
@@ -4091,6 +4136,380 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun copyRange1BasedPagedRotate(
+        srcPath: String,
+        dest: PdfDocument,
+        from1: Int,
+        to1: Int,
+        pageBatch: Int,
+        rotate: Boolean = false
+    ) {
+        var from = from1
+        while (from <= to1) {
+            val to = min(from + pageBatch - 1, to1)
+            PdfDocument(rdr(srcPath)).use { src ->
+                if (rotate) {
+                    for (pageNum in from..to) {
+                        val page = src.getPage(pageNum)
+                        val rotatedPage = dest.addNewPage(PageSize(page.pageSize.height, page.pageSize.width))
+                        val canvas = PdfCanvas(rotatedPage)
+
+                        canvas.concatMatrix(0.0, 1.0, -1.0, 0.0, page.pageSize.height.toDouble(), 0.0)
+
+                        val formXObject = page.copyAsFormXObject(dest)
+                        canvas.addXObjectAt(formXObject, 0f, 0f)
+                        runCatching { formXObject.flush() }
+
+                        runCatching { rotatedPage.flush() }
+                    }
+                    runCatching { dest.flushCopiedObjects(src) }
+                } else {
+                    src.copyPagesTo(from, to, dest)
+                    runCatching { dest.flushCopiedObjects(src) }
+                }
+            }
+
+            if (!rotate) {
+                val added = to - from + 1
+                for (i in 0 until added) {
+                    val p = dest.numberOfPages - i
+                    if (p >= 1) runCatching { dest.getPage(p).flush() }
+                }
+            }
+
+            from = to + 1
+        }
+    }
+
+    private fun rotatePlpPageGroupAndMirrorSource(plpIndex: Int) {
+        val total = sourceTempPageCount()
+        if (total <= 0) return
+        val per = perGroup()
+
+        showInProgress(getString(R.string.in_progress_my))
+        lockScreenOrientation()
+
+        val selectedIdxBefore = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val source = sourceTempFile()
+
+                val groupStart = plpIndex * per
+                val groupEnd = min(total - 1, groupStart + per - 1)
+                val toRotateCount = if (groupStart <= groupEnd) (groupEnd - groupStart + 1) else 0
+
+                if (toRotateCount <= 0) {
+                    withContext(Dispatchers.Main) {
+                        hideInProgressIfShown()
+                        unlockScreenOrientation()
+                    }
+                    return@launch
+                }
+
+                val outWork = sourceWorkFile()
+                if (outWork.exists()) outWork.delete()
+
+                val writerPropsLocal = writerProps()
+
+                val partFiles = mutableListOf<File>()
+
+                val pagesPerChunk = batchValueOrDefault1()
+
+                var chunkStart = 0
+                var chunkIndex = 0
+
+                while (chunkStart < total) {
+
+                    val chunkEnd = min(total - 1, chunkStart + pagesPerChunk - 1)
+
+                    val partFile = File(
+                        (outWork.parentFile ?: cacheDir),
+                        outWork.name + ".p" + chunkIndex.toString()
+                    )
+
+                    PdfDocument(
+                        PdfWriter(partFile.absolutePath, writerPropsLocal)
+                    ).use { partDest ->
+                        partDest.setFlushUnusedObjects(true)
+
+                        val pageBatch = batchValueOrDefault1()
+
+                        var runStart: Int? = null
+                        var runRotate: Boolean? = null
+                        var currentRunEnd = -1
+
+                        fun flushRun(rs0: Int, re0: Int, rotate: Boolean) {
+                            if (rs0 <= re0) {
+                                val from1 = rs0 + 1
+                                val to1   = re0 + 1
+                                copyRange1BasedPagedRotate(
+                                    source.absolutePath,
+                                    partDest,
+                                    from1,
+                                    to1,
+                                    pageBatch,
+                                    rotate
+                                )
+                            }
+                        }
+
+                        for (pZero in chunkStart..chunkEnd) {
+                            val isRot = pZero in groupStart..groupEnd
+
+                            if (runStart == null) {
+                                runStart = pZero
+                                currentRunEnd = pZero
+                                runRotate = isRot
+                            } else if (isRot == runRotate && pZero == currentRunEnd + 1) {
+                                currentRunEnd = pZero
+                            } else {
+                                flushRun(runStart, currentRunEnd, runRotate == true)
+                                runStart = pZero
+                                currentRunEnd = pZero
+                                runRotate = isRot
+                            }
+                        }
+
+                        runStart?.let { flushRun(it, currentRunEnd, runRotate == true) }
+                    }
+
+                    partFiles += partFile
+                    chunkStart = chunkEnd + 1
+                    chunkIndex++
+                }
+
+                PdfDocument(
+                    PdfWriter(outWork.absolutePath, writerPropsLocal)
+                ).use { destDoc ->
+                    destDoc.setFlushUnusedObjects(true)
+                    val partBatch = batchValueOrDefault1()
+
+                    for (pf in partFiles) {
+                        val totalPartPages = PdfDocument(rdr(pf.absolutePath)).use { it.numberOfPages }
+
+                        var from = 1
+                        while (from <= totalPartPages) {
+                            val to = min(from + partBatch - 1, totalPartPages)
+
+                            PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
+                                partDoc.copyPagesTo(from, to, destDoc)
+                                runCatching { destDoc.flushCopiedObjects(partDoc) }
+                            }
+
+                            val count = to - from + 1
+                            for (i in 0 until count) {
+                                val p = destDoc.numberOfPages - i
+                                if (p >= 1) runCatching { destDoc.getPage(p).flush() }
+                            }
+
+                            from = to + 1
+                        }
+                    }
+                }
+
+                partFiles.forEach { runCatching { it.delete() } }
+
+                if (source.exists()) source.delete()
+                outWork.renameTo(source)
+
+                createTempPdfInternal()
+
+                withContext(Dispatchers.Main) {
+                    resetThumbDocKey("rotateGroup:$plpIndex")
+
+                    val onReloadStarted: () -> Unit = {
+                        hideInProgressIfShown()
+                        unlockScreenOrientation()
+                    }
+
+                    reloadThumbnailsFromPlp(
+                        targetIndex = null,
+                        targetOffsetPx = 0,
+                        restorePrevious = true,
+                        indicesToSelect = selectedIdxBefore.toSet(),
+                        releaseUiAtStart = false,
+                        onStarted = onReloadStarted
+                    )
+
+                    updateButtonsState()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
+                    hideInProgressIfShown()
+                    unlockScreenOrientation()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    unlockScreenOrientation()
+                }
+            }
+        }
+    }
+
+    private fun rotateSelectedPlpGroups() {
+        val total = sourceTempPageCount()
+        if (total <= 0) return
+
+        val selectedPlp = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+            .sorted()
+
+        if (selectedPlp.isEmpty()) return
+
+        showInProgress(getString(R.string.in_progress_my))
+        lockScreenOrientation()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val per = perGroup()
+                val source = sourceTempFile()
+
+                val toRotate = HashSet<Int>().apply {
+                    for (pi in selectedPlp) {
+                        val start = pi * per
+                        val end = min(total - 1, start + per - 1)
+                        for (i in start..end) add(i)
+                    }
+                }
+
+                val outWork = sourceWorkFile()
+                if (outWork.exists()) outWork.delete()
+
+                val writerPropsLocal = writerProps()
+                val partFiles = mutableListOf<File>()
+                val pagesPerChunk = batchValueOrDefault1()
+
+                var chunkStart = 0
+                var chunkIndex = 0
+
+                while (chunkStart < total) {
+
+                    val chunkEnd = min(total - 1, chunkStart + pagesPerChunk - 1)
+
+                    val partFile = File(
+                        (outWork.parentFile ?: cacheDir),
+                        outWork.name + ".p" + chunkIndex.toString()
+                    )
+
+                    PdfDocument(
+                        PdfWriter(partFile.absolutePath, writerPropsLocal)
+                    ).use { partDest ->
+                        partDest.setFlushUnusedObjects(true)
+
+                        val pageBatch = batchValueOrDefault1()
+
+                        var runStart: Int? = null
+                        var runRotate: Boolean? = null
+                        var currentRunEnd = -1
+
+                        fun flushRun(rs0: Int, re0: Int, rotate: Boolean) {
+                            if (rs0 <= re0) {
+                                val from1 = rs0 + 1
+                                val to1   = re0 + 1
+                                copyRange1BasedPagedRotate(
+                                    source.absolutePath,
+                                    partDest,
+                                    from1,
+                                    to1,
+                                    pageBatch,
+                                    rotate
+                                )
+                            }
+                        }
+
+                        for (pZero in chunkStart..chunkEnd) {
+                            val isRot = pZero in toRotate
+
+                            if (runStart == null) {
+                                runStart = pZero
+                                currentRunEnd = pZero
+                                runRotate = isRot
+                            } else if (isRot == runRotate && pZero == currentRunEnd + 1) {
+                                currentRunEnd = pZero
+                            } else {
+                                flushRun(runStart, currentRunEnd, runRotate == true)
+                                runStart = pZero
+                                currentRunEnd = pZero
+                                runRotate = isRot
+                            }
+                        }
+
+                        runStart?.let { flushRun(it, currentRunEnd, runRotate == true) }
+                    }
+
+                    partFiles += partFile
+                    chunkStart = chunkEnd + 1
+                    chunkIndex++
+                }
+
+                PdfDocument(
+                    PdfWriter(outWork.absolutePath, writerPropsLocal)
+                ).use { destDoc ->
+                    destDoc.setFlushUnusedObjects(true)
+                    val partBatch = batchValueOrDefault1()
+
+                    for (pf in partFiles) {
+                        val totalPartPages = PdfDocument(rdr(pf.absolutePath)).use { it.numberOfPages }
+
+                        var from = 1
+                        while (from <= totalPartPages) {
+                            val to = min(from + partBatch - 1, totalPartPages)
+
+                            PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
+                                partDoc.copyPagesTo(from, to, destDoc)
+                                runCatching { destDoc.flushCopiedObjects(partDoc) }
+                            }
+
+                            val count = to - from + 1
+                            for (i in 0 until count) {
+                                val p = destDoc.numberOfPages - i
+                                if (p >= 1) runCatching { destDoc.getPage(p).flush() }
+                            }
+
+                            from = to + 1
+                        }
+                    }
+                }
+
+                partFiles.forEach { runCatching { it.delete() } }
+
+                if (source.exists()) source.delete()
+                outWork.renameTo(source)
+
+                createTempPdfInternal()
+
+                withContext(Dispatchers.Main) {
+                    resetThumbDocKey("rotateSelected")
+
+                    val onReloadStarted: () -> Unit = {
+                        hideInProgressIfShown()
+                        unlockScreenOrientation()
+                    }
+
+                    reloadThumbnailsFromPlp(
+                        releaseUiAtStart = false,
+                        onStarted = onReloadStarted
+                    )
+
+                    updateButtonsState()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
+                    hideInProgressIfShown()
+                    unlockScreenOrientation()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    unlockScreenOrientation()
+                }
+            }
+        }
+    }
+
     private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
         val total = sourceTempPageCount()
         if (total <= 0) return
@@ -4811,7 +5230,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     @Throws(Exception::class)
-    private fun createNupPdf(outFile: File) {
+    fun createNupPdf(outFile: File) {
 
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
@@ -4826,7 +5245,8 @@ class MainActivity : AppCompatActivity() {
             val land = cfg.isLandscape
             val drawFrame = cfg.drawFrame
             val scaleIndRequested = cfg.scaleIndividually
-            val basePs    = if (land) PageSize.A4.rotate()
+            val fitIndRequested = cfg.fitIndividually
+            val basePs = if (land) PageSize.A4.rotate()
             else PageSize.A4
 
             val source = sourceTempFile()
@@ -4853,6 +5273,7 @@ class MainActivity : AppCompatActivity() {
             var outPageStart = 0
             var chunkIndex = 0
             while (outPageStart < totalOutPages) {
+
                 val outPageEndInclusive = min(totalOutPages - 1, outPageStart + outPagesPerChunk - 1)
 
                 val srcStart = outPageStart * per
@@ -4872,6 +5293,142 @@ class MainActivity : AppCompatActivity() {
                             val page1Based = globalIdx + 1
                             val sp = src.getPage(page1Based)
                             val sz = sp.pageSize
+
+                            var contentWidth  = sz.width
+                            var contentHeight = sz.height
+
+                            var contentOriginX = 0f
+                            var contentOriginY = 0f
+                            var hasBoundingBox = false
+
+                            if (scaleIndRequested && fitIndRequested) {
+                                runCatching {
+                                    val listener = object : IEventListener {
+
+                                        var box: Rectangle? = null
+
+                                        private fun includeRect(r: Rectangle) {
+                                            if (box == null) {
+                                                box = Rectangle(r)
+                                            } else {
+                                                val b = box!!
+                                                val bx1 = b.x
+                                                val by1 = b.y
+                                                val bx2 = b.x + b.width
+                                                val by2 = b.y + b.height
+
+                                                val rx1 = r.x
+                                                val ry1 = r.y
+                                                val rx2 = r.x + r.width
+                                                val ry2 = r.y + r.height
+
+                                                val nx1 = min(bx1, rx1)
+                                                val ny1 = min(by1, ry1)
+                                                val nx2 = max(bx2, rx2)
+                                                val ny2 = max(by2, ry2)
+
+                                                box = Rectangle(nx1, ny1, nx2 - nx1, ny2 - ny1)
+                                            }
+                                        }
+
+                                        override fun eventOccurred(data: IEventData?, type: EventType?) {
+                                            if (data == null || type == null) return
+                                            when (type) {
+                                                EventType.RENDER_TEXT -> {
+                                                    val tri = data as TextRenderInfo
+                                                    val ascent = tri.ascentLine
+                                                    val descent = tri.descentLine
+                                                    val x = descent.startPoint.get(Vector.I1)
+                                                    val y = descent.startPoint.get(Vector.I2)
+                                                    val w = ascent.endPoint.get(Vector.I1) - x
+                                                    val h = ascent.endPoint.get(Vector.I2) - y
+                                                    if (w > 0 && h > 0) {
+                                                        includeRect(Rectangle(x, y, w, h))
+                                                    }
+                                                }
+                                                EventType.RENDER_IMAGE -> {
+                                                    val iri = data as ImageRenderInfo
+                                                    val ctm = iri.imageCtm
+                                                    val p0 = Vector(0f, 0f, 1f).cross(ctm)
+                                                    val p1 = Vector(1f, 0f, 1f).cross(ctm)
+                                                    val p2 = Vector(0f, 1f, 1f).cross(ctm)
+                                                    val p3 = Vector(1f, 1f, 1f).cross(ctm)
+
+                                                    val xs = floatArrayOf(
+                                                        p0.get(Vector.I1),
+                                                        p1.get(Vector.I1),
+                                                        p2.get(Vector.I1),
+                                                        p3.get(Vector.I1)
+                                                    )
+                                                    val ys = floatArrayOf(
+                                                        p0.get(Vector.I2),
+                                                        p1.get(Vector.I2),
+                                                        p2.get(Vector.I2),
+                                                        p3.get(Vector.I2)
+                                                    )
+
+                                                    var minX = xs[0]
+                                                    var maxX = xs[0]
+                                                    var minY = ys[0]
+                                                    var maxY = ys[0]
+                                                    for (i in 1 until xs.size) {
+                                                        val xx = xs[i]
+                                                        val yy = ys[i]
+                                                        if (xx < minX) minX = xx
+                                                        if (xx > maxX) maxX = xx
+                                                        if (yy < minY) minY = yy
+                                                        if (yy > maxY) maxY = yy
+                                                    }
+                                                    val w = maxX - minX
+                                                    val h = maxY - minY
+                                                    if (w > 0 && h > 0) {
+                                                        includeRect(Rectangle(minX, minY, w, h))
+                                                    }
+                                                }
+                                                EventType.RENDER_PATH -> {
+                                                    val pri = data as PathRenderInfo
+                                                    val path = pri.path
+                                                    val ctm = pri.ctm
+                                                    val subpaths = path.subpaths
+                                                    for (sub in subpaths) {
+                                                        val pts = sub.piecewiseLinearApproximation
+                                                        if (pts == null || pts.isEmpty()) continue
+                                                        for (pt in pts) {
+                                                            val v = Vector(pt.x.toFloat(), pt.y.toFloat(), 1f).cross(ctm)
+                                                            val px = v.get(Vector.I1)
+                                                            val py = v.get(Vector.I2)
+                                                            if (px.isFinite() && py.isFinite()) {
+                                                                includeRect(Rectangle(px, py, 0f, 0f))
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                else -> {
+                                                }
+                                            }
+                                        }
+
+                                        override fun getSupportedEvents(): Set<EventType> {
+                                            return setOf(
+                                                EventType.RENDER_TEXT,
+                                                EventType.RENDER_IMAGE,
+                                                EventType.RENDER_PATH
+                                            )
+                                        }
+                                    }
+
+                                    val processor = PdfCanvasProcessor(listener)
+                                    processor.processPageContent(sp)
+                                    val box = listener.box
+                                    if (box != null) {
+                                        contentWidth  = box.width
+                                        contentHeight = box.height
+                                        contentOriginX = box.x
+                                        contentOriginY = box.y
+                                        hasBoundingBox = true
+                                    }
+                                }
+                            }
 
                             if (idxLocal % per == 0) {
                                 val psForThisPage =
@@ -4894,7 +5451,7 @@ class MainActivity : AppCompatActivity() {
                                     val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
                                     min(min(cellW / refW, cellH / refH), 1f)
                                 } else {
-                                    min(cellW / sz.width, cellH / sz.height)
+                                    min(cellW / contentWidth, cellH / contentHeight)
                                 }
 
                             val col     = idxLocal % cols
@@ -4904,7 +5461,12 @@ class MainActivity : AppCompatActivity() {
 
                             val finalScale: Float
                             if (isPortraitMode && isSingleUp) {
-                                val fit = min(cellW / sz.width, cellH / sz.height)
+                                val fit =
+                                    if (scaleIndRequested && fitIndRequested) {
+                                        min(cellW / contentWidth, cellH / contentHeight)
+                                    } else {
+                                        min(cellW / sz.width, cellH / sz.height)
+                                    }
                                 val s = if (scaleIndRequested) fit else min(fit, 1f)
                                 finalScale = if (!scaleIndRequested) {
                                     if (s < 1f) s else scale
@@ -4943,10 +5505,24 @@ class MainActivity : AppCompatActivity() {
                                     }
                             }
 
-                            val offsetX = cellX + (cellW - sz.width * finalScale) / 2f
-                            val offsetY = cellY + (cellH - sz.height * finalScale) / 2f
+                            val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
+
+                            val offsetX: Float
+                            val offsetY: Float
+
+                            if (useBoundingBox) {
+                                val contentWScaled = contentWidth * finalScale
+                                val contentHScaled = contentHeight * finalScale
+
+                                offsetX = cellX + (cellW - contentWScaled) / 2f - contentOriginX * finalScale
+                                offsetY = cellY + (cellH - contentHScaled) / 2f - contentOriginY * finalScale
+                            } else {
+                                offsetX = cellX + (cellW - sz.width * finalScale) / 2f
+                                offsetY = cellY + (cellH - sz.height * finalScale) / 2f
+                            }
 
                             val fx  = sp.copyAsFormXObject(pdf)
+
                             canvas.saveState()
                             canvas.concatMatrix(
                                 finalScale.toDouble(), 0.0, 0.0, finalScale.toDouble(),
@@ -4996,8 +5572,8 @@ class MainActivity : AppCompatActivity() {
                             runCatching { destDoc.flushCopiedObjects(partDoc) }
                         }
 
-                        val added = to - from + 1
-                        for (i in 0 until added) {
+                        val count = to - from + 1
+                        for (i in 0 until count) {
                             val p = destDoc.numberOfPages - i
                             if (p >= 1) runCatching { destDoc.getPage(p).flush() }
                         }
@@ -5880,6 +6456,7 @@ class MainActivity : AppCompatActivity() {
                 KEY_NORMAL_COLUMNS, KEY_LABEL_COLUMNS,
                 KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
                 KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
+                KEY_NORMAL_FIT, KEY_LABEL_FIT,
                 KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
                 KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
                 KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,
@@ -5945,6 +6522,7 @@ class MainActivity : AppCompatActivity() {
             KEY_NORMAL_COLUMNS, KEY_LABEL_COLUMNS,
             KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
             KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
+            KEY_NORMAL_FIT, KEY_LABEL_FIT,
             KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
             KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
             KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,

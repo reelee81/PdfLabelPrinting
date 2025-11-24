@@ -10,7 +10,9 @@
     <string name="save_pdf_file">MENTÉS</string>
     <string name="send">KÜLDÉS</string>
     <string name="save_load">Ment / Betölt</string>
-    <string name="row_column">Sor / Oszlop</string>
+    <string name="row">Sor</string>
+    <string name="column">Oszlop</string>
+    <string name="fit">Fit</string>
     <string name="margin">Margó</string>
     <string name="add">Hozzáad</string>
     <string name="xy_add">XY / Hozzáad</string>
@@ -63,6 +65,7 @@
     <string name="failed_to_build_pages_with_msg">Az oldalak összeállítása sikertelen: %1$s</string>
     <string name="failed_to_add_empty_page_with_msg">Üres oldal hozzáadása sikertelen: %1$s</string>
     <string name="failed_to_delete_selected_groups_with_msg">A kijelölt csoportok törlése sikertelen: %1$s</string>
+    <string name="failed_to_rotate_selected_groups_with_msg">A kijelölt csoportok forgatása sikertelen: %1$s</string>
     <string name="failed_to_delete_signature">Az aláírás törlése sikertelen</string>
     <string name="signature_image_invalid">Az aláírás képe nem található/érvénytelen</string>
     <string name="enter_value_0_100">Adj meg 0 és 100 közötti értéket (mm)</string>
