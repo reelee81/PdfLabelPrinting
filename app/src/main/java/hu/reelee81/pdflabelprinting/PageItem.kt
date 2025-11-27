@@ -6,7 +6,7 @@ import kotlin.jvm.Transient
 
 class PageItem(
     @Transient var thumbnail: Bitmap?,
-    @Suppress("unused") val filePath: String?,
+    val filePath: String?,
     val pageIndex: Int,
     val widthPts: Float,
     val heightPts: Float,

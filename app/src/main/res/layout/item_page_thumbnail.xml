@@ -28,7 +28,7 @@
             android:contentDescription="@null" />
 
         <androidx.appcompat.widget.AppCompatImageButton
-            android:id="@+id/btn_rotate"
+            android:id="@+id/btn_rotate_left"
             android:layout_gravity="top|left"
             android:layout_width="@dimen/dp_24"
             android:layout_height="@dimen/dp_24"

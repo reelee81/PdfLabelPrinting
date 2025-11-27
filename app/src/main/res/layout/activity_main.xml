@@ -566,14 +566,14 @@
                             app:tintMode="src_in"
                             app:tint="@color/ic_delete_rotate_all_color"
                             app:layout_constraintLeft_toRightOf="@id/all_select"
-                            app:layout_constraintRight_toLeftOf="@+id/rotate_select"
+                            app:layout_constraintRight_toLeftOf="@+id/rotate_left_select"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"
                             app:layout_constraintHorizontal_weight="1"
                             app:layout_constraintHorizontal_chainStyle="spread" />
 
                         <androidx.appcompat.widget.AppCompatImageButton
-                            android:id="@+id/rotate_select"
+                            android:id="@+id/rotate_left_select"
                             android:layout_width="@dimen/dp_24"
                             android:layout_height="@dimen/dp_24"
                             android:background="@null"
@@ -596,7 +596,7 @@
                             app:srcCompat="@drawable/ic_end_24"
                             app:tintMode="src_in"
                             app:tint="@color/ic_delete_rotate_all_color"
-                            app:layout_constraintLeft_toRightOf="@+id/rotate_select"
+                            app:layout_constraintLeft_toRightOf="@+id/rotate_left_select"
                             app:layout_constraintRight_toLeftOf="@id/delete_select"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"

@@ -73,7 +73,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.DoNotInline
 import androidx.annotation.RequiresApi
 import androidx.annotation.WorkerThread
 import androidx.appcompat.app.AlertDialog
@@ -556,7 +555,7 @@ class MainActivity : AppCompatActivity() {
         adapter = ThumbnailAdapter(
             pageItems,
             deleteListener = { pos -> deletePlpPageGroupAndMirrorSource(pos) },
-            rotateListener = { pos -> rotatePlpPageGroupAndMirrorSource(pos) },
+            rotateLeftListener = { pos -> rotateLeftPlpPageGroupAndMirrorSource(pos) },
             clickListener = { _ -> openPdfWithDriveOrOther() },
             selectionChanged = { _, _ -> updateButtonsState() }
         )
@@ -2802,15 +2801,15 @@ class MainActivity : AppCompatActivity() {
         deleteBtn.isEnabled   = hasPages && hasSelection
         deleteBtn.isActivated = hasSelection
 
-        val rotateBtn = findViewById<AppCompatImageButton>(R.id.rotate_select)
-        if (rotateBtn.getTag(R.id.rotate_select) != true) {
-            rotateBtn.setOnClickListener {
-                rotateSelectedPlpGroups()
+        val rotateLeftBtn = findViewById<AppCompatImageButton>(R.id.rotate_left_select)
+        if (rotateLeftBtn.getTag(R.id.rotate_left_select) != true) {
+            rotateLeftBtn.setOnClickListener {
+                rotateLeftSelectedPlpGroups()
             }
-            rotateBtn.setTag(R.id.rotate_select, true)
+            rotateLeftBtn.setTag(R.id.rotate_left_select, true)
         }
-        rotateBtn.isEnabled   = hasPages && hasSelection
-        rotateBtn.isActivated = hasSelection
+        rotateLeftBtn.isEnabled   = hasPages && hasSelection
+        rotateLeftBtn.isActivated = hasSelection
 
         fastScroller?.setEnabledWhen(hasPages)
 
@@ -3172,7 +3171,6 @@ class MainActivity : AppCompatActivity() {
 
         @RequiresApi(VERSION_CODES.S)
         private object Api31Impl {
-            @DoNotInline
             @JvmStatic
             fun newInstance(path: String): BitmapRegionDecoder {
                 return BitmapRegionDecoder.newInstance(path)
@@ -3911,44 +3909,75 @@ class MainActivity : AppCompatActivity() {
                             )
                         }
                     } else {
-                        ParcelFileDescriptor.open(srcFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                            PdfRenderer(pfd).use { renderer ->
-                                for (g in 0 until plpPages) {
-                                    val pageNumberText = if (per == 1) {
-                                        "${g + 1}/$totalSrcPages"
-                                    } else {
-                                        val totalGroups = (totalSrcPages + per - 1) / per
-                                        "${g + 1}/$totalGroups"
+                        val batchSize = batchValueOrDefault1()
+
+                        val widths       = FloatArray(totalSrcPages) { fallbackW }
+                        val heights      = FloatArray(totalSrcPages) { fallbackH }
+
+                        var startPage = 0
+                        while (startPage < totalSrcPages) {
+                            val endExclusive = min(totalSrcPages, startPage + batchSize)
+
+                            val reader = PdfReader(srcFile.absolutePath)
+                            val pdfDoc = PdfDocument(reader)
+                            try {
+                                val srcPageCount   = pdfDoc.numberOfPages
+                                val lastPageToRead = min(endExclusive, srcPageCount)
+
+                                for (pageZeroBased in startPage until lastPageToRead) {
+                                    val pageIndex1Based = pageZeroBased + 1
+                                    runCatching {
+                                        val page = pdfDoc.getPage(pageIndex1Based)
+
+                                        val box = page.cropBox ?: page.mediaBox
+                                        val w = box.width
+                                        val h = box.height
+
+                                        widths[pageZeroBased]       = w
+                                        heights[pageZeroBased]      = h
+                                    }.onFailure {
+
                                     }
-
-                                    val firstSrcPageZeroBased = g * per
-
-                                    var widthPtsForLabel = fallbackW
-                                    var heightPtsForLabel = fallbackH
-
-                                    if (firstSrcPageZeroBased in 0 until renderer.pageCount) {
-                                        runCatching {
-                                            renderer.openPage(firstSrcPageZeroBased).use { pg ->
-                                                widthPtsForLabel = pg.width.toFloat()
-                                                heightPtsForLabel = pg.height.toFloat()
-                                            }
-                                        }.onFailure {
-
-                                        }
-                                    }
-
-                                    list.add(
-                                        PageItem(
-                                            thumbnail = null,
-                                            filePath = plp.absolutePath,
-                                            pageIndex = g,
-                                            widthPts = widthPtsForLabel,
-                                            heightPts = heightPtsForLabel,
-                                            pageNumberText = pageNumberText
-                                        )
-                                    )
                                 }
+                            } finally {
+                                runCatching { pdfDoc.close() }
                             }
+
+                            startPage = endExclusive
+                        }
+
+                        for (g in 0 until plpPages) {
+                            val pageNumberText = if (per == 1) {
+                                "${g + 1}/$totalSrcPages"
+                            } else {
+                                val totalGroups = (totalSrcPages + per - 1) / per
+                                "${g + 1}/$totalGroups"
+                            }
+
+                            val firstSrcPageZeroBased = g * per
+
+                            val wPtsForLabel =
+                                if (firstSrcPageZeroBased in 0 until totalSrcPages)
+                                    widths[firstSrcPageZeroBased]
+                                else
+                                    fallbackW
+
+                            val hPtsForLabel =
+                                if (firstSrcPageZeroBased in 0 until totalSrcPages)
+                                    heights[firstSrcPageZeroBased]
+                                else
+                                    fallbackH
+
+                            list.add(
+                                PageItem(
+                                    thumbnail = null,
+                                    filePath = plp.absolutePath,
+                                    pageIndex = g,
+                                    widthPts = wPtsForLabel,
+                                    heightPts = hPtsForLabel,
+                                    pageNumberText = pageNumberText
+                                )
+                            )
                         }
                     }
 
@@ -4136,7 +4165,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun copyRange1BasedPagedRotate(
+    private fun copyRange1BasedPagedRotateLeft90Right270(
         srcPath: String,
         dest: PdfDocument,
         from1: Int,
@@ -4181,7 +4210,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun rotatePlpPageGroupAndMirrorSource(plpIndex: Int) {
+    private fun rotateLeftPlpPageGroupAndMirrorSource(plpIndex: Int) {
         val total = sourceTempPageCount()
         if (total <= 0) return
         val per = perGroup()
@@ -4244,7 +4273,7 @@ class MainActivity : AppCompatActivity() {
                             if (rs0 <= re0) {
                                 val from1 = rs0 + 1
                                 val to1   = re0 + 1
-                                copyRange1BasedPagedRotate(
+                                copyRange1BasedPagedRotateLeft90Right270(
                                     source.absolutePath,
                                     partDest,
                                     from1,
@@ -4349,15 +4378,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun rotateSelectedPlpGroups() {
+    private fun rotateLeftSelectedPlpGroups() {
         val total = sourceTempPageCount()
         if (total <= 0) return
 
-        val selectedPlp = viewModel.pageItems
+        val selectedIdxBefore = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
             .sorted()
 
-        if (selectedPlp.isEmpty()) return
+        if (selectedIdxBefore.isEmpty()) return
 
         showInProgress(getString(R.string.in_progress_my))
         lockScreenOrientation()
@@ -4368,7 +4397,7 @@ class MainActivity : AppCompatActivity() {
                 val source = sourceTempFile()
 
                 val toRotate = HashSet<Int>().apply {
-                    for (pi in selectedPlp) {
+                    for (pi in selectedIdxBefore) {
                         val start = pi * per
                         val end = min(total - 1, start + per - 1)
                         for (i in start..end) add(i)
@@ -4409,7 +4438,7 @@ class MainActivity : AppCompatActivity() {
                             if (rs0 <= re0) {
                                 val from1 = rs0 + 1
                                 val to1   = re0 + 1
-                                copyRange1BasedPagedRotate(
+                                copyRange1BasedPagedRotateLeft90Right270(
                                     source.absolutePath,
                                     partDest,
                                     from1,
@@ -4491,6 +4520,7 @@ class MainActivity : AppCompatActivity() {
 
                     reloadThumbnailsFromPlp(
                         releaseUiAtStart = false,
+                        indicesToSelect = selectedIdxBefore.toSet(),
                         onStarted = onReloadStarted
                     )
 
