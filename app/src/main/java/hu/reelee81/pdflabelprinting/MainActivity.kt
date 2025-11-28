@@ -126,10 +126,6 @@ import com.itextpdf.kernel.pdf.canvas.parser.data.TextRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.listener.IEventListener
 import org.xmlpull.v1.XmlPullParser
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
@@ -147,6 +143,10 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -263,6 +263,7 @@ class MainActivity : AppCompatActivity() {
     private var didRunNScrollColdStartFix = false
     private var isFirstCreate = true
     private var batchValid = true
+    private var sourceRotation: IntArray = IntArray(0)
 
     @Volatile private var isPlpRebuilding = false
     @Volatile private var clearSelectionOnNextRebuild = false
@@ -3619,6 +3620,13 @@ class MainActivity : AppCompatActivity() {
         val target = sourceTempFile()
         if (target.exists()) target.delete()
         outWork.renameTo(target)
+
+        val newTotal = sourceTempPageCount()
+        if (sourceRotation.size < newTotal) {
+            val oldRotation = sourceRotation
+            sourceRotation = IntArray(newTotal)
+            oldRotation.copyInto(sourceRotation)
+        }
     }
 
     private fun addEmptyPageToSource() {
@@ -3697,6 +3705,13 @@ class MainActivity : AppCompatActivity() {
                 val target = sourceTempFile()
                 if (target.exists()) target.delete()
                 outWork.renameTo(target)
+
+                val newTotal = oldPageCount + 1
+                if (sourceRotation.size < newTotal) {
+                    val oldRotation = sourceRotation
+                    sourceRotation = IntArray(newTotal)
+                    oldRotation.copyInto(sourceRotation)
+                }
 
                 createTempPdfInternal()
 
@@ -4130,6 +4145,23 @@ class MainActivity : AppCompatActivity() {
                 if (srcFile.exists()) srcFile.delete()
                 outWork.renameTo(srcFile)
 
+                val newRotation = IntArray(totalSrcPages)
+                var destIndex = 0
+                val oldRotation = sourceRotation.copyOf()
+                ordered.forEach { item ->
+                    val originalPlpIndex = item.pageIndex
+                    val start = originalPlpIndex * per
+                    val end = min(totalSrcPages - 1, start + per - 1)
+                    if (start < totalSrcPages) {
+                        for (i in start..end) {
+                            if (destIndex < newRotation.size) {
+                                newRotation[destIndex++] = oldRotation.getOrElse(i) { 0 }
+                            }
+                        }
+                    }
+                }
+                sourceRotation = newRotation
+
                 createTempPdfInternal()
 
                 withContext(Dispatchers.Main) {
@@ -4165,55 +4197,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun copyRange1BasedPagedRotateLeft90Right270(
-        srcPath: String,
-        dest: PdfDocument,
-        from1: Int,
-        to1: Int,
-        pageBatch: Int,
-        rotate: Boolean = false
-    ) {
-        var from = from1
-        while (from <= to1) {
-            val to = min(from + pageBatch - 1, to1)
-            PdfDocument(rdr(srcPath)).use { src ->
-                if (rotate) {
-                    for (pageNum in from..to) {
-                        val page = src.getPage(pageNum)
-                        val rotatedPage = dest.addNewPage(PageSize(page.pageSize.height, page.pageSize.width))
-                        val canvas = PdfCanvas(rotatedPage)
-
-                        canvas.concatMatrix(0.0, 1.0, -1.0, 0.0, page.pageSize.height.toDouble(), 0.0)
-
-                        val formXObject = page.copyAsFormXObject(dest)
-                        canvas.addXObjectAt(formXObject, 0f, 0f)
-                        runCatching { formXObject.flush() }
-
-                        runCatching { rotatedPage.flush() }
-                    }
-                    runCatching { dest.flushCopiedObjects(src) }
-                } else {
-                    src.copyPagesTo(from, to, dest)
-                    runCatching { dest.flushCopiedObjects(src) }
-                }
-            }
-
-            if (!rotate) {
-                val added = to - from + 1
-                for (i in 0 until added) {
-                    val p = dest.numberOfPages - i
-                    if (p >= 1) runCatching { dest.getPage(p).flush() }
-                }
-            }
-
-            from = to + 1
-        }
+    private fun rotateLeftPlpPageGroupAndMirrorSource(plpIndex: Int) {
+        updateRotationForPlpIndices(listOf(plpIndex), "rotateGroup:$plpIndex")
     }
 
-    private fun rotateLeftPlpPageGroupAndMirrorSource(plpIndex: Int) {
+    private fun rotateLeftSelectedPlpGroups() {        val selectedIdx = viewModel.pageItems
+        .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+        .sorted()
+
+        if (selectedIdx.isEmpty()) return
+
+        updateRotationForPlpIndices(selectedIdx, "rotateSelected")
+    }
+
+    private fun updateRotationForPlpIndices(plpIndices: List<Int>, resetKey: String) {
         val total = sourceTempPageCount()
         if (total <= 0) return
-        val per = perGroup()
 
         showInProgress(getString(R.string.in_progress_my))
         lockScreenOrientation()
@@ -4223,130 +4222,25 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val source = sourceTempFile()
-
-                val groupStart = plpIndex * per
-                val groupEnd = min(total - 1, groupStart + per - 1)
-                val toRotateCount = if (groupStart <= groupEnd) (groupEnd - groupStart + 1) else 0
-
-                if (toRotateCount <= 0) {
-                    withContext(Dispatchers.Main) {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-                    return@launch
+                val per = perGroup()
+                if (sourceRotation.size != total) {
+                    sourceRotation = IntArray(total)
                 }
 
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
-
-                val writerPropsLocal = writerProps()
-
-                val partFiles = mutableListOf<File>()
-
-                val pagesPerChunk = batchValueOrDefault1()
-
-                var chunkStart = 0
-                var chunkIndex = 0
-
-                while (chunkStart < total) {
-
-                    val chunkEnd = min(total - 1, chunkStart + pagesPerChunk - 1)
-
-                    val partFile = File(
-                        (outWork.parentFile ?: cacheDir),
-                        outWork.name + ".p" + chunkIndex.toString()
-                    )
-
-                    PdfDocument(
-                        PdfWriter(partFile.absolutePath, writerPropsLocal)
-                    ).use { partDest ->
-                        partDest.setFlushUnusedObjects(true)
-
-                        val pageBatch = batchValueOrDefault1()
-
-                        var runStart: Int? = null
-                        var runRotate: Boolean? = null
-                        var currentRunEnd = -1
-
-                        fun flushRun(rs0: Int, re0: Int, rotate: Boolean) {
-                            if (rs0 <= re0) {
-                                val from1 = rs0 + 1
-                                val to1   = re0 + 1
-                                copyRange1BasedPagedRotateLeft90Right270(
-                                    source.absolutePath,
-                                    partDest,
-                                    from1,
-                                    to1,
-                                    pageBatch,
-                                    rotate
-                                )
-                            }
-                        }
-
-                        for (pZero in chunkStart..chunkEnd) {
-                            val isRot = pZero in groupStart..groupEnd
-
-                            if (runStart == null) {
-                                runStart = pZero
-                                currentRunEnd = pZero
-                                runRotate = isRot
-                            } else if (isRot == runRotate && pZero == currentRunEnd + 1) {
-                                currentRunEnd = pZero
-                            } else {
-                                flushRun(runStart, currentRunEnd, runRotate == true)
-                                runStart = pZero
-                                currentRunEnd = pZero
-                                runRotate = isRot
-                            }
-                        }
-
-                        runStart?.let { flushRun(it, currentRunEnd, runRotate == true) }
-                    }
-
-                    partFiles += partFile
-                    chunkStart = chunkEnd + 1
-                    chunkIndex++
-                }
-
-                PdfDocument(
-                    PdfWriter(outWork.absolutePath, writerPropsLocal)
-                ).use { destDoc ->
-                    destDoc.setFlushUnusedObjects(true)
-                    val partBatch = batchValueOrDefault1()
-
-                    for (pf in partFiles) {
-                        val totalPartPages = PdfDocument(rdr(pf.absolutePath)).use { it.numberOfPages }
-
-                        var from = 1
-                        while (from <= totalPartPages) {
-                            val to = min(from + partBatch - 1, totalPartPages)
-
-                            PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
-                                partDoc.copyPagesTo(from, to, destDoc)
-                                runCatching { destDoc.flushCopiedObjects(partDoc) }
-                            }
-
-                            val count = to - from + 1
-                            for (i in 0 until count) {
-                                val p = destDoc.numberOfPages - i
-                                if (p >= 1) runCatching { destDoc.getPage(p).flush() }
-                            }
-
-                            from = to + 1
+                for (plpIndex in plpIndices) {
+                    val groupStart = plpIndex * per
+                    val groupEnd = min(total - 1, groupStart + per - 1)
+                    if (groupStart <= groupEnd) {
+                        for (i in groupStart..groupEnd) {
+                            sourceRotation[i] = (sourceRotation[i] + 1) % 4
                         }
                     }
                 }
-
-                partFiles.forEach { runCatching { it.delete() } }
-
-                if (source.exists()) source.delete()
-                outWork.renameTo(source)
 
                 createTempPdfInternal()
 
                 withContext(Dispatchers.Main) {
-                    resetThumbDocKey("rotateGroup:$plpIndex")
+                    resetThumbDocKey(resetKey)
 
                     val onReloadStarted: () -> Unit = {
                         hideInProgressIfShown()
@@ -4364,168 +4258,7 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-    }
 
-    private fun rotateLeftSelectedPlpGroups() {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-            .sorted()
-
-        if (selectedIdxBefore.isEmpty()) return
-
-        showInProgress(getString(R.string.in_progress_my))
-        lockScreenOrientation()
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val per = perGroup()
-                val source = sourceTempFile()
-
-                val toRotate = HashSet<Int>().apply {
-                    for (pi in selectedIdxBefore) {
-                        val start = pi * per
-                        val end = min(total - 1, start + per - 1)
-                        for (i in start..end) add(i)
-                    }
-                }
-
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
-
-                val writerPropsLocal = writerProps()
-                val partFiles = mutableListOf<File>()
-                val pagesPerChunk = batchValueOrDefault1()
-
-                var chunkStart = 0
-                var chunkIndex = 0
-
-                while (chunkStart < total) {
-
-                    val chunkEnd = min(total - 1, chunkStart + pagesPerChunk - 1)
-
-                    val partFile = File(
-                        (outWork.parentFile ?: cacheDir),
-                        outWork.name + ".p" + chunkIndex.toString()
-                    )
-
-                    PdfDocument(
-                        PdfWriter(partFile.absolutePath, writerPropsLocal)
-                    ).use { partDest ->
-                        partDest.setFlushUnusedObjects(true)
-
-                        val pageBatch = batchValueOrDefault1()
-
-                        var runStart: Int? = null
-                        var runRotate: Boolean? = null
-                        var currentRunEnd = -1
-
-                        fun flushRun(rs0: Int, re0: Int, rotate: Boolean) {
-                            if (rs0 <= re0) {
-                                val from1 = rs0 + 1
-                                val to1   = re0 + 1
-                                copyRange1BasedPagedRotateLeft90Right270(
-                                    source.absolutePath,
-                                    partDest,
-                                    from1,
-                                    to1,
-                                    pageBatch,
-                                    rotate
-                                )
-                            }
-                        }
-
-                        for (pZero in chunkStart..chunkEnd) {
-                            val isRot = pZero in toRotate
-
-                            if (runStart == null) {
-                                runStart = pZero
-                                currentRunEnd = pZero
-                                runRotate = isRot
-                            } else if (isRot == runRotate && pZero == currentRunEnd + 1) {
-                                currentRunEnd = pZero
-                            } else {
-                                flushRun(runStart, currentRunEnd, runRotate == true)
-                                runStart = pZero
-                                currentRunEnd = pZero
-                                runRotate = isRot
-                            }
-                        }
-
-                        runStart?.let { flushRun(it, currentRunEnd, runRotate == true) }
-                    }
-
-                    partFiles += partFile
-                    chunkStart = chunkEnd + 1
-                    chunkIndex++
-                }
-
-                PdfDocument(
-                    PdfWriter(outWork.absolutePath, writerPropsLocal)
-                ).use { destDoc ->
-                    destDoc.setFlushUnusedObjects(true)
-                    val partBatch = batchValueOrDefault1()
-
-                    for (pf in partFiles) {
-                        val totalPartPages = PdfDocument(rdr(pf.absolutePath)).use { it.numberOfPages }
-
-                        var from = 1
-                        while (from <= totalPartPages) {
-                            val to = min(from + partBatch - 1, totalPartPages)
-
-                            PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
-                                partDoc.copyPagesTo(from, to, destDoc)
-                                runCatching { destDoc.flushCopiedObjects(partDoc) }
-                            }
-
-                            val count = to - from + 1
-                            for (i in 0 until count) {
-                                val p = destDoc.numberOfPages - i
-                                if (p >= 1) runCatching { destDoc.getPage(p).flush() }
-                            }
-
-                            from = to + 1
-                        }
-                    }
-                }
-
-                partFiles.forEach { runCatching { it.delete() } }
-
-                if (source.exists()) source.delete()
-                outWork.renameTo(source)
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("rotateSelected")
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        releaseUiAtStart = false,
-                        indicesToSelect = selectedIdxBefore.toSet(),
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4559,6 +4292,11 @@ class MainActivity : AppCompatActivity() {
             try {
                 val source = sourceTempFile()
 
+                val totalBefore = sourceTempPageCount()
+                if (sourceRotation.size != totalBefore) {
+                    sourceRotation = IntArray(totalBefore)
+                }
+
                 val groupStart = plpIndex * per
                 val groupEnd = min(total - 1, groupStart + per - 1)
                 val toSkipCount = if (groupStart <= groupEnd) (groupEnd - groupStart + 1) else 0
@@ -4567,10 +4305,12 @@ class MainActivity : AppCompatActivity() {
                 if (remaining <= 0) {
                     if (source.exists()) source.delete()
                     plpTempFile().delete()
+                    sourceRotation = IntArray(0)
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
                         updateButtonsState()
                         hideInProgressIfShown()
+                        unlockScreenOrientation()
                     }
                     return@launch
                 }
@@ -4634,6 +4374,18 @@ class MainActivity : AppCompatActivity() {
                 if (source.exists()) source.delete()
                 outWork.renameTo(source)
 
+                val newRotationList = sourceRotation.toMutableList()
+                val groupStartIdx = plpIndex * per
+                val groupEndIdx = min(totalBefore - 1, groupStartIdx + per - 1)
+                if (groupStartIdx <= groupEndIdx) {
+                    for (i in groupEndIdx downTo groupStartIdx) {
+                        if (i < newRotationList.size) {
+                            newRotationList.removeAt(i)
+                        }
+                    }
+                }
+                sourceRotation = newRotationList.toIntArray()
+
                 createTempPdfInternal()
 
                 withContext(Dispatchers.Main) {
@@ -4687,6 +4439,11 @@ class MainActivity : AppCompatActivity() {
                 val per = perGroup()
                 val source = sourceTempFile()
 
+                val totalBefore = sourceTempPageCount()
+                if (sourceRotation.size != totalBefore) {
+                    sourceRotation = IntArray(totalBefore)
+                }
+
                 val toSkip = HashSet<Int>().apply {
                     for (pi in selectedPlp) {
                         val start = pi * per
@@ -4699,10 +4456,12 @@ class MainActivity : AppCompatActivity() {
                 if (remaining <= 0) {
                     if (source.exists()) source.delete()
                     plpTempFile().delete()
+                    sourceRotation = IntArray(0)
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
                         updateButtonsState()
                         hideInProgressIfShown()
+                        unlockScreenOrientation()
                     }
                     return@launch
                 }
@@ -4765,6 +4524,15 @@ class MainActivity : AppCompatActivity() {
 
                 if (source.exists()) source.delete()
                 outWork.renameTo(source)
+
+                val toSkipIndices = HashSet<Int>()
+                selectedPlp.forEach { plpIdx ->
+                    val start = plpIdx * per
+                    val end = min(totalBefore - 1, start + per - 1)
+                    (start..end).forEach { toSkipIndices.add(it) }
+                }
+                val newRotation = sourceRotation.filterIndexed { index, _ -> !toSkipIndices.contains(index) }
+                sourceRotation = newRotation.toIntArray()
 
                 createTempPdfInternal()
 
@@ -5283,6 +5051,9 @@ class MainActivity : AppCompatActivity() {
             if (!source.exists()) throw IllegalStateException(getString(R.string.no_source_pages))
 
             val totalSrcPages = PdfDocument(rdr(source.absolutePath)).use { it.numberOfPages }
+            if (sourceRotation.size != totalSrcPages) {
+                sourceRotation = IntArray(totalSrcPages)
+            }
 
             val marginPt = marginMm * 72f / 25.4f
             val per      = (rows * cols).coerceAtLeast(1)
@@ -5460,6 +5231,12 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
 
+                            val rotation = sourceRotation.getOrElse(globalIdx) { 0 }
+                            val isSideways = rotation == 1 || rotation == 3
+
+                            val srcPageW = if (isSideways) sz.height else sz.width
+                            val srcPageH = if (isSideways) sz.width else sz.height
+
                             if (idxLocal % per == 0) {
                                 val psForThisPage =
                                     if (isPortraitMode && isSingleUp) PageSize.A4
@@ -5474,15 +5251,17 @@ class MainActivity : AppCompatActivity() {
                             val cellW = (psForThisPage.width  - marginPt * (cols + 1)) / cols
                             val cellH = (psForThisPage.height - marginPt * (rows + 1)) / rows
 
-                            val scale =
-                                if (!scaleIndRequested) {
-                                    val srcIsPortrait = sz.height >= sz.width
-                                    val refW = if (srcIsPortrait) PageSize.A4.width else PageSize.A4.height
-                                    val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
-                                    min(min(cellW / refW, cellH / refH), 1f)
-                                } else {
-                                    min(cellW / contentWidth, cellH / contentHeight)
-                                }
+                            val scale: Float
+                            if (scaleIndRequested) {
+                                val fitContentW = if (isSideways) contentHeight else contentWidth
+                                val fitContentH = if (isSideways) contentWidth else contentHeight
+                                scale = min(cellW / fitContentW, cellH / fitContentH)
+                            } else {
+                                val srcIsPortrait = srcPageH >= srcPageW
+                                val refW = if (srcIsPortrait) PageSize.A4.width else PageSize.A4.height
+                                val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
+                                scale = min(min(cellW / refW, cellH / refH), 1f)
+                            }
 
                             val col     = idxLocal % cols
                             val row     = (idxLocal / cols) % rows
@@ -5493,9 +5272,11 @@ class MainActivity : AppCompatActivity() {
                             if (isPortraitMode && isSingleUp) {
                                 val fit =
                                     if (scaleIndRequested && fitIndRequested) {
-                                        min(cellW / contentWidth, cellH / contentHeight)
+                                        val fitContentW = if (isSideways) contentHeight else contentWidth
+                                        val fitContentH = if (isSideways) contentWidth else contentHeight
+                                        min(cellW / fitContentW, cellH / fitContentH)
                                     } else {
-                                        min(cellW / sz.width, cellH / sz.height)
+                                        min(cellW / srcPageW, cellH / srcPageH)
                                     }
                                 val s = if (scaleIndRequested) fit else min(fit, 1f)
                                 finalScale = if (!scaleIndRequested) {
@@ -5504,14 +5285,14 @@ class MainActivity : AppCompatActivity() {
                                     s
                                 }
                             } else {
-                                val fitToCell = min(cellW / sz.width, cellH / sz.height)
+                                val fitToCell = min(cellW / srcPageW, cellH / srcPageH)
                                 finalScale =
                                     if (!scaleIndRequested) {
                                         val fitNoUpscale = min(fitToCell, 1f)
                                         if (isSingleUp) {
                                             if (fitNoUpscale < 1f) fitNoUpscale else scale
                                         } else {
-                                            val srcIsPortrait = sz.height >= sz.width
+                                            val srcIsPortrait = srcPageH >= srcPageW
                                             val orientationMismatch =
                                                 (land && srcIsPortrait) || (!land && !srcIsPortrait)
 
@@ -5535,29 +5316,78 @@ class MainActivity : AppCompatActivity() {
                                     }
                             }
 
+                            val fx  = sp.copyAsFormXObject(pdf)
+                            canvas.saveState()
+
                             val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
 
-                            val offsetX: Float
-                            val offsetY: Float
+                            val scaledW: Float
+                            val scaledH: Float
+                            val originX: Float
+                            val originY: Float
 
                             if (useBoundingBox) {
-                                val contentWScaled = contentWidth * finalScale
-                                val contentHScaled = contentHeight * finalScale
-
-                                offsetX = cellX + (cellW - contentWScaled) / 2f - contentOriginX * finalScale
-                                offsetY = cellY + (cellH - contentHScaled) / 2f - contentOriginY * finalScale
+                                scaledW = contentWidth * finalScale
+                                scaledH = contentHeight * finalScale
+                                originX = contentOriginX
+                                originY = contentOriginY
                             } else {
-                                offsetX = cellX + (cellW - sz.width * finalScale) / 2f
-                                offsetY = cellY + (cellH - sz.height * finalScale) / 2f
+                                scaledW = sz.width * finalScale
+                                scaledH = sz.height * finalScale
+                                originX = 0f
+                                originY = 0f
                             }
 
-                            val fx  = sp.copyAsFormXObject(pdf)
+                            val rotatedScaledW = if (isSideways) scaledH else scaledW
+                            val rotatedScaledH = if (isSideways) scaledW else scaledH
 
-                            canvas.saveState()
-                            canvas.concatMatrix(
-                                finalScale.toDouble(), 0.0, 0.0, finalScale.toDouble(),
-                                offsetX.toDouble(), offsetY.toDouble()
-                            )
+                            val offsetX = cellX + (cellW - rotatedScaledW) / 2
+                            val offsetY = cellY + (cellH - rotatedScaledH) / 2
+
+                            val a: Double
+                            val b: Double
+                            val c: Double
+                            val d: Double
+                            val e: Double
+                            val f: Double
+
+                            when (rotation) {
+                                1 -> {
+                                    a = 0.0
+                                    b = finalScale.toDouble()
+                                    c = -finalScale.toDouble()
+                                    d = 0.0
+                                    e = offsetX.toDouble() + scaledH + originY * finalScale
+                                    f = offsetY.toDouble() - originX * finalScale
+                                }
+                                2 -> {
+                                    a = -finalScale.toDouble()
+                                    b = 0.0
+                                    c = 0.0
+                                    d = -finalScale.toDouble()
+                                    e = offsetX.toDouble() + scaledW + originX * finalScale
+                                    f = offsetY.toDouble() + scaledH + originY * finalScale
+                                }
+                                3 -> {
+                                    a = 0.0
+                                    b = -finalScale.toDouble()
+                                    c = finalScale.toDouble()
+                                    d = 0.0
+                                    e = offsetX.toDouble() - originY * finalScale
+                                    f = offsetY.toDouble() + scaledW + originX * finalScale
+                                }
+                                else -> {
+                                    a = finalScale.toDouble()
+                                    b = 0.0
+                                    c = 0.0
+                                    d = finalScale.toDouble()
+                                    e = offsetX.toDouble() - originX * finalScale
+                                    f = offsetY.toDouble() - originY * finalScale
+                                }
+                            }
+
+                            canvas.concatMatrix(a, b, c, d, e, f)
+
                             canvas.addXObjectAt(fx, 0f, 0f)
                             runCatching { fx.flush() }
                             canvas.restoreState()
@@ -6296,6 +6126,20 @@ class MainActivity : AppCompatActivity() {
 
             if (srcFile.exists()) srcFile.delete()
             outWorkSrc.renameTo(srcFile)
+
+            val per = perGroup()
+            val totalPages = sourceTempPageCount()
+            if (sourceRotation.size == totalPages) {
+                signedMap.keys.forEach { plpIndex ->
+                    val start = plpIndex * per
+                    val end = min(totalPages - 1, start + per - 1)
+                    if (start < totalPages) {
+                        for (i in start..end) {
+                            sourceRotation[i] = 0
+                        }
+                    }
+                }
+            }
 
         } catch (_: Exception) {
 

@@ -538,18 +538,15 @@
                     <androidx.constraintlayout.widget.ConstraintLayout
                         android:id="@+id/toolbar_row"
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="@dimen/dp_4"
-                        android:layout_marginBottom="@dimen/dp_4">
+                        android:layout_height="wrap_content">
 
                         <com.google.android.material.checkbox.MaterialCheckBox
                             android:id="@+id/all_select"
-                            android:layout_width="@dimen/dp_24"
-                            android:layout_height="@dimen/dp_24"
+                            android:layout_width="@dimen/dp_32"
+                            android:layout_height="@dimen/dp_32"
                             android:text=""
                             android:background="@null"
                             android:contentDescription="@null"
-                            android:layout_marginLeft="@dimen/dp_4"
                             app:buttonTint="@color/ic_checkbox_all_color"
                             app:layout_constraintLeft_toLeftOf="parent"
                             app:layout_constraintTop_toTopOf="parent"
@@ -558,10 +555,12 @@
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/list_start"
                             android:layout_width="0dp"
-                            android:layout_height="@dimen/dp_24"
+                            android:layout_height="@dimen/dp_32"
                             android:background="@null"
                             android:scaleType="center"
                             android:contentDescription="@null"
+                            android:layout_marginLeft="@dimen/dp_32"
+                            android:layout_marginRight="@dimen/dp_32"
                             app:srcCompat="@drawable/ic_start_24"
                             app:tintMode="src_in"
                             app:tint="@color/ic_delete_rotate_all_color"
@@ -574,8 +573,8 @@
 
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/rotate_left_select"
-                            android:layout_width="@dimen/dp_24"
-                            android:layout_height="@dimen/dp_24"
+                            android:layout_width="@dimen/dp_32"
+                            android:layout_height="@dimen/dp_32"
                             android:background="@null"
                             android:contentDescription="@null"
                             app:srcCompat="@drawable/ic_rotate_left_24"
@@ -589,10 +588,12 @@
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/list_end"
                             android:layout_width="0dp"
-                            android:layout_height="@dimen/dp_24"
+                            android:layout_height="@dimen/dp_32"
                             android:background="@null"
                             android:scaleType="center"
                             android:contentDescription="@null"
+                            android:layout_marginLeft="@dimen/dp_32"
+                            android:layout_marginRight="@dimen/dp_32"
                             app:srcCompat="@drawable/ic_end_24"
                             app:tintMode="src_in"
                             app:tint="@color/ic_delete_rotate_all_color"
@@ -604,11 +605,10 @@
 
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/delete_select"
-                            android:layout_width="@dimen/dp_24"
-                            android:layout_height="@dimen/dp_24"
+                            android:layout_width="@dimen/dp_32"
+                            android:layout_height="@dimen/dp_32"
                             android:background="@null"
                             android:contentDescription="@null"
-                            android:layout_marginRight="@dimen/dp_4"
                             app:srcCompat="@drawable/ic_delete_24"
                             app:tintMode="src_in"
                             app:tint="@color/ic_delete_rotate_all_color"
@@ -674,11 +674,11 @@
                     android:visibility="visible"
                     android:background="@null"
                     android:contentDescription="@null"
+                    android:layout_marginLeft="@dimen/dp_8"
                     app:buttonTint="@color/ic_checkbox_password_color"
                     app:layout_constraintLeft_toRightOf="@id/password_out_text"
                     app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    android:layout_marginLeft="@dimen/dp_8" />
+                    app:layout_constraintBottom_toBottomOf="parent" />
 
                 <androidx.appcompat.widget.AppCompatImageButton
                     android:id="@+id/add_time"
@@ -686,13 +686,13 @@
                     android:layout_height="@dimen/dp_24"
                     android:background="@null"
                     android:contentDescription="@null"
+                    android:layout_marginLeft="@dimen/dp_8"
                     app:srcCompat="@drawable/ic_add_24"
                     app:tintMode="src_in"
                     app:tint="@color/ic_custom_icon_color"
                     app:layout_constraintLeft_toRightOf="@id/password_out"
                     app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    android:layout_marginLeft="@dimen/dp_8" />
+                    app:layout_constraintBottom_toBottomOf="parent" />
 
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/file_name"
