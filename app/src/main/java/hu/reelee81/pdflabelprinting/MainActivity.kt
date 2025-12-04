@@ -98,6 +98,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
@@ -2843,6 +2844,8 @@ class MainActivity : AppCompatActivity() {
     ) {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_my) }
 
+        PdfProcessingForegroundService.start(this, resolvedMessage)
+
         if (!::progressDialog.isInitialized || !progressDialog.isShowing) {
             val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, null)
             view.findViewById<MaterialTextView>(R.id.progress_bar_simple_text)?.text = resolvedMessage
@@ -2865,6 +2868,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideInProgressIfShown() {
+        PdfProcessingForegroundService.stop(this)
+
         if (::progressDialog.isInitialized && progressDialog.isShowing) {
             progressDialog.dismiss()
         }
@@ -6204,6 +6209,14 @@ class MainActivity : AppCompatActivity() {
         setThemedBackArrow()
         suppressNup = false
         runCatching { snapshotInitialPrefsIfNeeded() }
+
+        if (::progressDialog.isInitialized && progressDialog.isShowing) {
+            val indicator = progressDialog.findViewById<CircularProgressIndicator>(R.id.progress_bar_indicator)
+            indicator?.post {
+                indicator.hide()
+                indicator.show()
+            }
+        }
 
         if (Build.VERSION.SDK_INT <= VERSION_CODES.N_MR1 && !didRunNScrollColdStartFix && isFirstCreate) {
             val sv = binding.rootScroll

@@ -12,6 +12,12 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
 
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.SEND" />
@@ -105,5 +111,10 @@
             android:name="hu.reelee81.pdflabelprinting.PdfViewer"
             android:exported="false"
             android:theme="@style/Theme.PdfLabelPrinting.PdfViewer" />
+
+        <service
+            android:name=".PdfProcessingForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
