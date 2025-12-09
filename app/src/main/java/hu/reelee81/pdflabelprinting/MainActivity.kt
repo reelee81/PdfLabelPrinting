@@ -35,6 +35,7 @@ import android.os.StrictMode
 import android.print.PrintAttributes
 import android.print.PrintManager
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
@@ -98,7 +99,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.progressindicator.CircularProgressIndicator
+import com.google.android.material.progressindicator.BaseProgressIndicator
 import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
@@ -145,6 +146,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -201,12 +203,22 @@ class MainActivity : AppCompatActivity() {
         const val KEY_THEME_RESTORE_OFFSET = "key_theme_restore_offset"
         const val KEY_THEME_RESTORE_SELECTED_CSV = "key_theme_restore_selected_csv"
         const val KEY_THEME_RESTORE_NSV_Y = "key_theme_restore_nsv_y"
+        const val KEY_BACKUP_ROWS = "backup_rows"
+        const val KEY_BACKUP_COLUMNS = "backup_columns"
+        const val KEY_BACKUP_MARGIN = "backup_margin"
+        const val KEY_BACKUP_ORIENTATION = "backup_orientation"
+        const val KEY_BACKUP_DRAW_FRAME = "backup_draw_frame"
+        const val KEY_BACKUP_SCALE = "backup_scale"
+        const val KEY_BACKUP_FIT = "backup_fit"
+        const val KEY_BACKUP_ROTATION = "backup_rotation"
         const val DEFAULT_SIG_POS_X_MM = 155
         const val DEFAULT_SIG_POS_Y_MM = 245
 
         private const val SOURCE_TEMP_NAME = "source_temp.pdf"
         private const val SOURCE_TEMP_WORK = "source_temp_work.pdf"
         private const val PLP_TEMP_NAME = "plp_temp.pdf"
+        private const val SOURCE_TEMP_COPY_NAME = "source_temp_copy.pdf"
+        private const val PLP_TEMP_COPY_NAME = "plp_temp_copy.pdf"
         private const val MAX_BASE_LEN = 251
         private const val MAX_INPUT = 100
         private const val KEEP_RECENT_EXPORTS = 0
@@ -266,6 +278,7 @@ class MainActivity : AppCompatActivity() {
     private var batchValid = true
     private var sourceRotation: IntArray = IntArray(0)
 
+    @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
     @Volatile private var clearSelectionOnNextRebuild = false
 
@@ -499,7 +512,7 @@ class MainActivity : AppCompatActivity() {
             if (result.resultCode == RESULT_OK && result.data != null) {
                 val uri = result.data?.data
                 if (uri != null) {
-                    showInProgress(getString(R.string.in_progress_my))
+                    showInProgress(getString(R.string.in_progress_save))
                     lockScreenOrientation()
                     lifecycleScope.launch(Dispatchers.IO) {
                         try {
@@ -741,7 +754,7 @@ class MainActivity : AppCompatActivity() {
                 val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
                 val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
                 if (needLock) {
-                    showInProgress(getString(R.string.in_progress_my))
+                    showInProgressUpdateUI(getString(R.string.in_progress_ui))
                     lockScreenOrientation()
                 }
 
@@ -752,7 +765,7 @@ class MainActivity : AppCompatActivity() {
                     indicesToSelect = indicesToSelect,
                     releaseUiAtStart = false,
                     onStarted = {
-                        hideInProgressIfShown()
+                        hideInProgressIfShownUpdateUI()
                         unlockScreenOrientation()
                         spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                     }
@@ -766,13 +779,13 @@ class MainActivity : AppCompatActivity() {
                 val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
                 val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
                 if (needLock) {
-                    showInProgress(getString(R.string.in_progress_my))
+                    showInProgressUpdateUI(getString(R.string.in_progress_ui))
                     lockScreenOrientation()
                 }
 
                 reloadThumbnailsFromPlp(
                     onStarted = {
-                        hideInProgressIfShown()
+                        hideInProgressIfShownUpdateUI()
                         unlockScreenOrientation()
                         spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                     }
@@ -782,13 +795,13 @@ class MainActivity : AppCompatActivity() {
             val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
             val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
             if (needLock) {
-                showInProgress(getString(R.string.in_progress_my))
+                showInProgressUpdateUI(getString(R.string.in_progress_ui))
                 lockScreenOrientation()
             }
 
             reloadThumbnailsFromPlp(
                 onStarted = {
-                    hideInProgressIfShown()
+                    hideInProgressIfShownUpdateUI()
                     unlockScreenOrientation()
                     spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                 }
@@ -825,6 +838,32 @@ class MainActivity : AppCompatActivity() {
     private fun sourceTempFile(): File = File(cacheDir, SOURCE_TEMP_NAME)
     private fun sourceWorkFile(): File = File(cacheDir, SOURCE_TEMP_WORK)
     private fun plpTempFile(): File = File(cacheDir, PLP_TEMP_NAME)
+
+    private fun backupTempFilesBeforeLongOperation() {
+        val sourceTemp = sourceTempFile()
+        if (sourceTemp.exists()) {
+            val sourceCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
+            runCatching {
+                FileInputStream(sourceTemp).use { input ->
+                    FileOutputStream(sourceCopy, false).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        }
+
+        val plpTemp = plpTempFile()
+        if (plpTemp.exists()) {
+            val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
+            runCatching {
+                FileInputStream(plpTemp).use { input ->
+                    FileOutputStream(plpCopy, false).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        }
+    }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
@@ -897,6 +936,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIncomingShareIntent(intent: Intent) {
+        if (::progressDialog.isInitialized && progressDialog.isShowing) {
+            return
+        }
+
         val action = intent.action
 
         val collected = LinkedHashSet<Uri>()
@@ -968,16 +1011,25 @@ class MainActivity : AppCompatActivity() {
                                 val decor = window?.decorView
                                 val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
                                 if (isWarmStart) {
-                                    showInProgress(getString(R.string.in_progress_my))
+                                    if (viewModel.pageItems.isEmpty()) {
+                                        saveBackupSettingsAsync()
+                                    }
+                                    showInProgress(getString(R.string.in_progress_opening))
                                     lockScreenOrientation()
                                     handlePdfUri(single)
                                 } else {
                                     decor?.post {
-                                        showInProgress(getString(R.string.in_progress_my))
+                                        if (viewModel.pageItems.isEmpty()) {
+                                            saveBackupSettingsAsync()
+                                        }
+                                        showInProgress(getString(R.string.in_progress_opening))
                                         lockScreenOrientation()
                                         handlePdfUri(single)
                                     } ?: run {
-                                        showInProgress(getString(R.string.in_progress_my))
+                                        if (viewModel.pageItems.isEmpty()) {
+                                            saveBackupSettingsAsync()
+                                        }
+                                        showInProgress(getString(R.string.in_progress_opening))
                                         lockScreenOrientation()
                                         handlePdfUri(single)
                                     }
@@ -1005,16 +1057,25 @@ class MainActivity : AppCompatActivity() {
                                 val decor = window?.decorView
                                 val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
                                 if (isWarmStart) {
-                                    showInProgress(getString(R.string.in_progress_my))
+                                    if (viewModel.pageItems.isEmpty()) {
+                                        saveBackupSettingsAsync()
+                                    }
+                                    showInProgress(getString(R.string.in_progress_opening))
                                     lockScreenOrientation()
                                     handlePdfUri(single)
                                 } else {
                                     decor?.post {
-                                        showInProgress(getString(R.string.in_progress_my))
+                                        if (viewModel.pageItems.isEmpty()) {
+                                            saveBackupSettingsAsync()
+                                        }
+                                        showInProgress(getString(R.string.in_progress_opening))
                                         lockScreenOrientation()
                                         handlePdfUri(single)
                                     } ?: run {
-                                        showInProgress(getString(R.string.in_progress_my))
+                                        if (viewModel.pageItems.isEmpty()) {
+                                            saveBackupSettingsAsync()
+                                        }
+                                        showInProgress(getString(R.string.in_progress_opening))
                                         lockScreenOrientation()
                                         handlePdfUri(single)
                                     }
@@ -1043,16 +1104,25 @@ class MainActivity : AppCompatActivity() {
                 val decor = window?.decorView
                 val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
                 if (isWarmStart) {
-                    showInProgress(getString(R.string.in_progress_my))
+                    if (viewModel.pageItems.isEmpty()) {
+                        saveBackupSettingsAsync()
+                    }
+                    showInProgress(getString(R.string.in_progress_opening))
                     lockScreenOrientation()
                     handlePdfUri(only)
                 } else {
                     decor?.post {
-                        showInProgress(getString(R.string.in_progress_my))
+                        if (viewModel.pageItems.isEmpty()) {
+                            saveBackupSettingsAsync()
+                        }
+                        showInProgress(getString(R.string.in_progress_opening))
                         lockScreenOrientation()
                         handlePdfUri(only)
                     } ?: run {
-                        showInProgress(getString(R.string.in_progress_my))
+                        if (viewModel.pageItems.isEmpty()) {
+                            saveBackupSettingsAsync()
+                        }
+                        showInProgress(getString(R.string.in_progress_opening))
                         lockScreenOrientation()
                         handlePdfUri(only)
                     }
@@ -1063,16 +1133,25 @@ class MainActivity : AppCompatActivity() {
                 val decor = window?.decorView
                 val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
                 if (isWarmStart) {
-                    showInProgress(getString(R.string.in_progress_my))
+                    if (viewModel.pageItems.isEmpty()) {
+                        saveBackupSettingsAsync()
+                    }
+                    showInProgress(getString(R.string.in_progress_opening))
                     lockScreenOrientation()
                     handlePdfUrisBatch(collected.toList())
                 } else {
                     decor?.post {
-                        showInProgress(getString(R.string.in_progress_my))
+                        if (viewModel.pageItems.isEmpty()) {
+                            saveBackupSettingsAsync()
+                        }
+                        showInProgress(getString(R.string.in_progress_opening))
                         lockScreenOrientation()
                         handlePdfUrisBatch(collected.toList())
                     } ?: run {
-                        showInProgress(getString(R.string.in_progress_my))
+                        if (viewModel.pageItems.isEmpty()) {
+                            saveBackupSettingsAsync()
+                        }
+                        showInProgress(getString(R.string.in_progress_opening))
                         lockScreenOrientation()
                         handlePdfUrisBatch(collected.toList())
                     }
@@ -1084,8 +1163,12 @@ class MainActivity : AppCompatActivity() {
     private fun handlePdfUrisBatch(uris: List<Uri>) {
         if (uris.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_opening))
         lockScreenOrientation()
+
+        if (viewModel.pageItems.isEmpty()) {
+            saveBackupSettingsAsync()
+        }
 
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
@@ -1152,7 +1235,7 @@ class MainActivity : AppCompatActivity() {
                                 } else {
                                     passwordBytes = entered.toByteArray(Charsets.UTF_8)
                                     attempt++
-                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_my)) }
+                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_opening)) }
                                 }
                             }
                         }
@@ -2110,7 +2193,7 @@ class MainActivity : AppCompatActivity() {
         }
         btnOk.setOnClickListener {
             if (!okReady) {
-                Toast.makeText(ctx, getString(R.string.in_progress_my), Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, getString(R.string.in_progress_signature_editing), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val leftWithin = (currentLeft - pageLeft).toFloat()
@@ -2839,6 +2922,167 @@ class MainActivity : AppCompatActivity() {
             ?.resetForNewDocument("$reason|${System.nanoTime()}")
     }
 
+    private fun showInProgressUpdateUI(message: String = getString(R.string.in_progress_ui),
+    ) {
+        val resolvedMessage = message.ifBlank { getString(R.string.in_progress_ui) }
+
+        PdfProcessingForegroundService.start(this, resolvedMessage)
+
+        if (!::progressDialog.isInitialized || !progressDialog.isShowing) {
+            val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog_update_ui, null)
+            view.findViewById<MaterialTextView>(R.id.progress_bar_update_ui_simple_text)?.text = resolvedMessage
+
+            progressDialog = MaterialAlertDialogBuilder(this)
+                .setView(view)
+                .setCancelable(false)
+                .create().apply {
+                    setCanceledOnTouchOutside(false)
+                    show()
+                }
+        } else {
+            progressDialog.findViewById<MaterialTextView>(R.id.progress_bar_update_ui_simple_text)?.text = resolvedMessage
+        }
+
+        window?.setFlags(
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        )
+    }
+
+    private fun hideInProgressIfShownUpdateUI() {
+        PdfProcessingForegroundService.stop(this)
+
+        if (::progressDialog.isInitialized && progressDialog.isShowing) {
+            progressDialog.dismiss()
+        }
+
+        window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+    }
+
+    private fun saveBackupSettingsAsync() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            prefs.edit {
+                putString(KEY_BACKUP_ROWS, numberOfRows.text.toString())
+                putString(KEY_BACKUP_COLUMNS, numberOfColumns.text.toString())
+                putString(KEY_BACKUP_MARGIN, margin.text.toString())
+                putBoolean(KEY_BACKUP_ORIENTATION, portrait.isChecked)
+                putBoolean(KEY_BACKUP_DRAW_FRAME, drawFrameSwitch.isChecked)
+                putBoolean(KEY_BACKUP_SCALE, scaleSwitch.isChecked)
+                putBoolean(KEY_BACKUP_FIT, fitSwitch.isChecked)
+                putString(KEY_BACKUP_ROTATION, sourceRotation.joinToString(","))
+            }
+        }
+    }
+
+    private fun loadBackupSettingsAndValidate(andThen: (() -> Unit)? = null) {
+        lifecycleScope.launch {
+            val data = withContext(Dispatchers.IO) {
+                val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                mapOf(
+                    "rows" to (prefs.getString(KEY_BACKUP_ROWS, null)),
+                    "columns" to (prefs.getString(KEY_BACKUP_COLUMNS, null)),
+                    "margin" to (prefs.getString(KEY_BACKUP_MARGIN, null)),
+                    "orientation" to prefs.getBoolean(KEY_BACKUP_ORIENTATION, true),
+                    "draw_frame" to prefs.getBoolean(KEY_BACKUP_DRAW_FRAME, false),
+                    "scale" to prefs.getBoolean(KEY_BACKUP_SCALE, false),
+                    "fit" to prefs.getBoolean(KEY_BACKUP_FIT, false),
+                    "rotation" to (prefs.getString(KEY_BACKUP_ROTATION, null))
+                )
+            }
+
+            suppressNup = true
+            try {
+                data["rows"]?.let { numberOfRows.setText(it as String) }
+                data["columns"]?.let { numberOfColumns.setText(it as String) }
+                data["margin"]?.let { margin.setText(it as String) }
+
+                val isPortrait = data["orientation"] as Boolean
+                portrait.isChecked = isPortrait
+                landscape.isChecked = !isPortrait
+
+                drawFrameSwitch.isChecked = data["draw_frame"] as Boolean
+                scaleSwitch.isChecked = data["scale"] as Boolean
+                fitSwitch.isChecked = data["fit"] as Boolean
+                fitSwitch.isEnabled = scaleSwitch.isChecked
+
+                val rotationStr = data["rotation"] as? String
+                if (!rotationStr.isNullOrEmpty()) {
+                    sourceRotation = rotationStr.split(",").mapNotNull { it.toIntOrNull() }.toIntArray()
+                } else if (rotationStr != null) {
+                    sourceRotation = IntArray(0)
+                }
+
+            } finally {
+                suppressNup = false
+            }
+
+            validateInputs()
+
+            andThen?.invoke()
+        }
+    }
+
+    private fun cancelLongRunningWorkAndCleanup() {
+        isSigningCancelled = true
+
+        lifecycleScope.coroutineContext.cancelChildren()
+
+        isPlpRebuilding = false
+        isLoadingSettingsProfile = false
+
+        val selectedIdxBeforeCancel = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+            .toSet()
+
+        val sourceBackup = File(cacheDir, SOURCE_TEMP_COPY_NAME)
+        val plpBackup = File(cacheDir, PLP_TEMP_COPY_NAME)
+
+        cacheDir.listFiles()?.forEach { f ->
+            if (f != sourceBackup && f != plpBackup) {
+                runCatching { f.delete() }
+            }
+        }
+
+        if (sourceBackup.exists()) {
+            val sourceFile = sourceTempFile()
+            runCatching {
+                FileInputStream(sourceBackup).use { input ->
+                    FileOutputStream(sourceFile, false).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+
+            runCatching { sourceBackup.delete() }
+        }
+
+        if (plpBackup.exists()) {
+            val plpFile = plpTempFile()
+            runCatching {
+                FileInputStream(plpBackup).use { input ->
+                    FileOutputStream(plpFile, false).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+
+            runCatching { plpBackup.delete() }
+        }
+
+        loadBackupSettingsAndValidate {
+            reloadThumbnailsFromPlp(
+                restorePrevious = true,
+                indicesToSelect = selectedIdxBeforeCancel,
+                releaseUiAtStart = false,
+                onStarted = {
+                    unlockScreenOrientation()
+                    hideInProgressIfShownUpdateUI()
+                }
+            )
+        }
+    }
+
     private fun showInProgress(
         message: String = getString(R.string.in_progress_my),
     ) {
@@ -2847,8 +3091,20 @@ class MainActivity : AppCompatActivity() {
         PdfProcessingForegroundService.start(this, resolvedMessage)
 
         if (!::progressDialog.isInitialized || !progressDialog.isShowing) {
+
+            backupTempFilesBeforeLongOperation()
+
             val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, null)
             view.findViewById<MaterialTextView>(R.id.progress_bar_simple_text)?.text = resolvedMessage
+
+            val btnCancel = view.findViewById<MaterialButton>(R.id.progress_bar_cancel)
+            btnCancel?.setOnClickListener {
+                cancelLongRunningWorkAndCleanup()
+
+                hideInProgressIfShown()
+
+                showInProgressUpdateUI()
+            }
 
             progressDialog = MaterialAlertDialogBuilder(this)
                 .setView(view)
@@ -2865,6 +3121,8 @@ class MainActivity : AppCompatActivity() {
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         )
+
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun hideInProgressIfShown() {
@@ -2875,6 +3133,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+
+        window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun readIntOr(et: EditText, min: Int, def: Int): Int {
@@ -2965,8 +3225,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handlePdfUri(uri: Uri) {
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_opening))
         lockScreenOrientation()
+
+        if (viewModel.pageItems.isEmpty()) {
+            saveBackupSettingsAsync()
+        }
 
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
@@ -3045,7 +3309,7 @@ class MainActivity : AppCompatActivity() {
                                 } else {
                                     passwordBytes = entered.toByteArray(Charsets.UTF_8)
                                     attempt++
-                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_my)) }
+                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_opening)) }
                                 }
                             }
                         }
@@ -3641,7 +3905,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_adding_empty_page))
         lockScreenOrientation()
 
         val selectedIdx = viewModel.pageItems
@@ -3778,7 +4042,7 @@ class MainActivity : AppCompatActivity() {
         if (isPlpRebuilding) return
         isPlpRebuilding = true
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_page_layout))
         lockScreenOrientation()
 
         val selectedIdx = viewModel.pageItems
@@ -4066,7 +4330,7 @@ class MainActivity : AppCompatActivity() {
     private fun persistPlpOrderToSourceTemp() {
         if (viewModel.pageItems.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_reordering))
         lockScreenOrientation()
 
         val selectedIdx = viewModel.pageItems
@@ -4219,7 +4483,7 @@ class MainActivity : AppCompatActivity() {
         val total = sourceTempPageCount()
         if (total <= 0) return
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_rotation))
         lockScreenOrientation()
 
         val selectedIdxBefore = viewModel.pageItems
@@ -4283,7 +4547,7 @@ class MainActivity : AppCompatActivity() {
         if (total <= 0) return
         val per = perGroup()
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_delete))
         lockScreenOrientation()
 
         val selectedIdxBefore = viewModel.pageItems
@@ -4436,7 +4700,7 @@ class MainActivity : AppCompatActivity() {
 
         if (selectedPlp.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_delete))
         lockScreenOrientation()
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -4638,7 +4902,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { false }
 
     private fun openPdfWithDriveOrOther() {
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_pdf_reading))
         lockScreenOrientation()
 
         lifecycleScope.launch {
@@ -4762,7 +5026,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun printNupPdf() {
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_print))
         lockScreenOrientation()
 
         lifecycleScope.launch {
@@ -4804,7 +5068,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveNupPdf() {
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_save))
         lockScreenOrientation()
 
         lifecycleScope.launch {
@@ -4862,7 +5126,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shareNupPdf() {
-        showInProgress(getString(R.string.in_progress_my))
+        showInProgress(getString(R.string.in_progress_send))
         lockScreenOrientation()
 
         lifecycleScope.launch {
@@ -5070,6 +5334,7 @@ class MainActivity : AppCompatActivity() {
                 FileOutputStream(outFile).use {
 
                 }
+                saveBackupSettingsAsync()
                 return
             }
 
@@ -5450,6 +5715,8 @@ class MainActivity : AppCompatActivity() {
 
             partFiles.forEach { runCatching { it.delete() } }
 
+            saveBackupSettingsAsync()
+
         } finally {
             if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
         }
@@ -5722,7 +5989,8 @@ class MainActivity : AppCompatActivity() {
         applyScanEffect: Boolean,
         applyGrayscalePage: Boolean
     ) {
-        showInProgress(getString(R.string.in_progress_my))
+        isSigningCancelled = false
+        showInProgress(getString(R.string.in_progress_signing))
         lockScreenOrientation()
 
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
@@ -5753,6 +6021,10 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
                     hideInProgressIfShown()
                 }
+                return@launch
+            }
+
+            if (isSigningCancelled) {
                 return@launch
             }
 
@@ -5833,6 +6105,10 @@ class MainActivity : AppCompatActivity() {
                 ParcelFileDescriptor.open(plp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                     PdfRenderer(pfd).use { renderer ->
                         for (idx in selectedPlpIndices) {
+                            if (isSigningCancelled) {
+                                return@launch
+                            }
+
                             if (idx < 0 || idx >= renderer.pageCount) continue
 
                             renderer.openPage(idx).use { page: PdfRenderer.Page ->
@@ -5982,6 +6258,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                if (isSigningCancelled) {
+                    return@launch
+                }
+
                 val plpWork = File(cacheDir, "${PLP_TEMP_NAME}.work")
                 if (plpWork.exists()) plpWork.delete()
 
@@ -6011,6 +6291,9 @@ class MainActivity : AppCompatActivity() {
 
                     var runStart: Int? = null
                     for (p in 1..totalPlpPages) {
+                        if (isSigningCancelled) {
+                            return@launch
+                        }
                         val zeroIdx = p - 1
                         val replacement = tmpSigned[zeroIdx]
                         if (replacement != null) {
@@ -6211,7 +6494,12 @@ class MainActivity : AppCompatActivity() {
         runCatching { snapshotInitialPrefsIfNeeded() }
 
         if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            val indicator = progressDialog.findViewById<CircularProgressIndicator>(R.id.progress_bar_indicator)
+            var indicator = progressDialog.findViewById<BaseProgressIndicator<*>>(R.id.progress_bar_indicator)
+
+            if (indicator == null) {
+                indicator = progressDialog.findViewById(R.id.progress_bar_indicator_update_ui)
+            }
+
             indicator?.post {
                 indicator.hide()
                 indicator.show()
@@ -6284,6 +6572,11 @@ class MainActivity : AppCompatActivity() {
                 true
             }
 
+            R.id.action_battery_optimization -> {
+                launchBatteryOptimizationSettings()
+                true
+            }
+
             R.id.action_save -> {
                 launchSaveSharedPreferences()
                 true
@@ -6296,6 +6589,63 @@ class MainActivity : AppCompatActivity() {
 
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun launchBatteryOptimizationSettings() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .create()
+
+        dialogView.findViewById<TextView>(R.id.signature_popup_title)
+            ?.setText(R.string.battery_optimization)
+
+        dialogView.findViewById<ListView>(R.id.listView)?.visibility = View.GONE
+
+        (dialogView as? LinearLayout)?.let { rootLayout ->
+            val horizontalMargin = resources.getDimensionPixelSize(R.dimen.dp_16)
+
+            val messageView = MaterialTextView(this).apply {
+                text = getString(R.string.battery_optimization_text)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(horizontalMargin, 0, horizontalMargin, 0)
+                }
+            }
+
+            rootLayout.addView(messageView, 1)
+        }
+
+        val btnNew    = dialogView.findViewById<Button>(R.id.btn_new)
+        val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
+        val btnOk     = dialogView.findViewById<Button>(R.id.btn_ok)
+        val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
+
+        btnNew?.visibility = View.GONE
+        btnRemove?.visibility = View.GONE
+
+        btnCancel?.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        btnOk?.setOnClickListener {
+            dialog.dismiss()
+            try {
+                val intent = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null)
+                )
+                startActivity(intent)
+            } catch (_: Exception) {
+
+            }
+        }
+
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
     }
 
     private fun launchSaveSharedPreferences() {

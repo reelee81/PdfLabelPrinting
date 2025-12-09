@@ -26,6 +26,13 @@
             android:checked="true" />
     </group>
 
+    <group android:id="@+id/battery_optimization_group">
+        <item
+            android:id="@+id/action_battery_optimization"
+            android:title="@string/battery_optimization"
+            app:showAsAction="never" />
+    </group>
+
     <group android:id="@+id/group_save_load">
         <item
             android:id="@+id/action_save"

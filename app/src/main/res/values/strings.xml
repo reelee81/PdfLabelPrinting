@@ -53,7 +53,21 @@
     <string name="toggle_password_visibility">Toggle password visibility</string>
     <string name="wrong_password">Wrong password</string>
     <string name="password_do_not_match">Passwords don\'t match</string>
-    <string name="in_progress_my">In progress\u2026</string>
+    <string name="in_progress_my">Processing in progress\u2026</string>
+    <string name="in_progress_opening">Opening\u2026</string>
+    <string name="in_progress_adding_empty_page">Adding empty page\u2026</string>
+    <string name="in_progress_delete">Delete\u2026</string>
+    <string name="in_progress_reordering">Reordering\u2026</string>
+    <string name="in_progress_signing">Signing\u2026</string>
+    <string name="in_progress_signature_editing">Signature editing\u2026</string>
+    <string name="in_progress_rotation">Rotation\u2026</string>
+    <string name="in_progress_print">Print\u2026</string>
+    <string name="in_progress_send">Send\u2026</string>
+    <string name="in_progress_save">Save\u2026</string>
+    <string name="in_progress_password_verification">Password verification\u2026</string>
+    <string name="in_progress_pdf_reading">Pdf reading\u2026</string>
+    <string name="in_progress_page_layout">Page layout\u2026</string>
+    <string name="in_progress_ui">UI update\u2026</string>
     <string name="no_app_can_open_pdf">No app can open PDF</string>
     <string name="no_app_can_share_pdf">No app can share PDF</string>
     <string name="print_service_not_available">Print service not available</string>
@@ -110,4 +124,11 @@
     <string name="jpeg_compress_failed_at">JPEG compress failed at y=%1$d</string>
     <string name="failed_to_replace_original_pdf_with_encrypted_version">Failed to replace original PDF with encrypted version</string>
     <string name="failed_to_rename_encrypted_pdf">Failed to rename encrypted PDF</string>
+    <string name="battery_optimization">Battery optimization</string>
+    <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app;
+        otherwise, the system may stop the processing when you put the app in the background or lock the screen. Different manufacturers place this setting in
+        different locations, but in general you can find it under Settings → Apps → App management → Pdf Label Printing, then look for “Power usage” or “Battery”
+        options where you can turn it on or off. Even with these adjustments, the process may still be paused on some devices because certain manufacturers are
+        very aggressive with battery saving (for example when the screen is locked), so if you want to be absolutely sure that long operations finish, stay on the
+        app screen.</string>
 </resources>
