@@ -146,10 +146,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 
 class MainActivity : AppCompatActivity() {
 
@@ -211,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_BACKUP_SCALE = "backup_scale"
         const val KEY_BACKUP_FIT = "backup_fit"
         const val KEY_BACKUP_ROTATION = "backup_rotation"
+        const val KEY_BACKUP_SELECTED = "backup_selected"
         const val DEFAULT_SIG_POS_X_MM = 155
         const val DEFAULT_SIG_POS_Y_MM = 245
 
@@ -295,10 +298,12 @@ class MainActivity : AppCompatActivity() {
     )
     private var lastBuiltNupConfig: NupConfig? = null
 
+    private val activeJobs = mutableListOf<Job>()
+
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && result.data?.data != null) {
             val uri = result.data!!.data!!
-            lifecycleScope.launch(Dispatchers.IO) {
+            val job = lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     val xml = exportAllSharedPreferencesXml()
                     contentResolver.openOutputStream(uri)?.use { out ->
@@ -308,19 +313,23 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, getString(R.string.msg_prefs_saved_success), Toast.LENGTH_LONG).show()
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, getString(R.string.msg_prefs_save_failed, e.message), Toast.LENGTH_LONG).show()
                     }
                 }
             }
+            activeJobs.add(job)
+            job.invokeOnCompletion { activeJobs.remove(job) }
         }
     }
 
     private val loadPrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && result.data?.data != null) {
             val uri = result.data!!.data!!
-            lifecycleScope.launch(Dispatchers.IO) {
+            val job = lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     val xml = contentResolver.openInputStream(uri)?.use { inp ->
                         inp.readBytes().toString(Charsets.UTF_8)
@@ -348,12 +357,16 @@ class MainActivity : AppCompatActivity() {
 
                         invalidateOptionsMenu()
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, getString(R.string.msg_prefs_load_failed, e.message), Toast.LENGTH_LONG).show()
                     }
                 }
             }
+            activeJobs.add(job)
+            job.invokeOnCompletion { activeJobs.remove(job) }
         }
     }
 
@@ -512,9 +525,15 @@ class MainActivity : AppCompatActivity() {
             if (result.resultCode == RESULT_OK && result.data != null) {
                 val uri = result.data?.data
                 if (uri != null) {
+                    val backupJob = lifecycleScope.launch {
+                        backupSelectionState()
+                    }
+                    activeJobs.add(backupJob)
+                    backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
                     showInProgress(getString(R.string.in_progress_save))
                     lockScreenOrientation()
-                    lifecycleScope.launch(Dispatchers.IO) {
+                    val job = lifecycleScope.launch(Dispatchers.IO) {
                         try {
                             val srcPath = pendingSaveNamedPath
                             if (srcPath.isNullOrEmpty()) throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
@@ -539,6 +558,8 @@ class MainActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 Toast.makeText(
@@ -556,6 +577,8 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    activeJobs.add(job)
+                    job.invokeOnCompletion { activeJobs.remove(job) }
                 } else {
                     pendingSaveNamedPath = null
                     pendingSaveNamedDisplayName = null
@@ -614,6 +637,8 @@ class MainActivity : AppCompatActivity() {
         ) {
             private var userDragActive = false
 
+            private var originalOrder: List<PageItem>? = null
+
             override fun onMove(
                 recyclerView: RecyclerView,
                 viewHolder: RecyclerView.ViewHolder,
@@ -621,10 +646,17 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 val from = viewHolder.bindingAdapterPosition
                 val to = target.bindingAdapterPosition
-                val moved = pageItems.removeAt(from)
-                pageItems.add(to, moved)
-                adapter.notifyItemMoved(from, to)
-                orderDirty = true
+
+                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) {
+                    return false
+                }
+
+                if (from != to) {
+                    val moved = pageItems.removeAt(from)
+                    pageItems.add(to, moved)
+                    adapter.notifyItemMoved(from, to)
+                    orderDirty = true
+                }
                 return true
             }
 
@@ -635,7 +667,17 @@ class MainActivity : AppCompatActivity() {
                 userDragActive = (actionState == ItemTouchHelper.ACTION_STATE_DRAG)
 
                 if (userDragActive) {
+                    val job = lifecycleScope.launch {
+                        backupSelectionState()
+                    }
+                    activeJobs.add(job)
+                    job.invokeOnCompletion { activeJobs.remove(job) }
+
                     try { fastScroller?.setTemporarilyDisabled(true) } catch (_: Exception) {}
+
+                    if (originalOrder == null) {
+                        originalOrder = ArrayList(pageItems)
+                    }
                 }
 
                 try {
@@ -648,7 +690,9 @@ class MainActivity : AppCompatActivity() {
                 super.clearView(recyclerView, viewHolder)
                 try { recyclerView.parent?.requestDisallowInterceptTouchEvent(false) } catch (_: Exception) {}
 
-                if (orderDirty) {
+                val hasOrderActuallyChanged = orderDirty && originalOrder?.equals(pageItems) == false
+
+                if (hasOrderActuallyChanged) {
                     val doPersist = {
                         if (orderDirty) {
                             persistPlpOrderToSourceTemp()
@@ -673,9 +717,12 @@ class MainActivity : AppCompatActivity() {
                     recyclerView.post(settleCheck)
 
                 } else {
+                    orderDirty = false
                     try { fastScroller?.setTemporarilyDisabled(false) } catch (_: Exception) {}
                     updateButtonsState()
                 }
+
+                originalOrder = null
             }
         }).attachToRecyclerView(rvThumbnails)
 
@@ -937,8 +984,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIncomingShareIntent(intent: Intent) {
         if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            return
-        }
+            return}
 
         val action = intent.action
 
@@ -971,6 +1017,35 @@ class MainActivity : AppCompatActivity() {
             if (looksPdf) collected.add(uri)
         }
 
+        fun processUris(uris: List<Uri>) {
+            if (uris.isEmpty()) return
+
+            val startProcessing = {
+                val backupJob = lifecycleScope.launch {
+                    backupSelectionState()
+                }
+                activeJobs.add(backupJob)
+                backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+                showInProgress(getString(R.string.in_progress_opening))
+                lockScreenOrientation()
+
+                if (uris.size == 1) {
+                    handlePdfUri(uris.first())
+                } else {
+                    handlePdfUrisBatch(uris)
+                }
+            }
+
+            val decor = window?.decorView
+            val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
+            if (isWarmStart) {
+                startProcessing()
+            } else {
+                decor?.post(startProcessing) ?: startProcessing()
+            }
+        }
+
         when (action) {
             Intent.ACTION_VIEW -> {
                 tryCollectIfLikelyPdf(intent.data)
@@ -999,6 +1074,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        if (collected.isNotEmpty()) {
+            processUris(collected.toList())
+            return
+        }
+
         if (collected.isEmpty()) {
             when (action) {
                 Intent.ACTION_VIEW -> {
@@ -1007,38 +1087,10 @@ class MainActivity : AppCompatActivity() {
                         val mtLc = try { contentResolver.getType(single)?.lowercase(Locale.ROOT) } catch (_: Exception) { null }
                         val nameLc = try { extractFileName(single).lowercase(Locale.ROOT) } catch (_: Exception) { "" }
                         if (isSupportedImageMime(mtLc) || isSupportedImageFileName(nameLc)) {
-                            run {
-                                val decor = window?.decorView
-                                val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
-                                if (isWarmStart) {
-                                    if (viewModel.pageItems.isEmpty()) {
-                                        saveBackupSettingsAsync()
-                                    }
-                                    showInProgress(getString(R.string.in_progress_opening))
-                                    lockScreenOrientation()
-                                    handlePdfUri(single)
-                                } else {
-                                    decor?.post {
-                                        if (viewModel.pageItems.isEmpty()) {
-                                            saveBackupSettingsAsync()
-                                        }
-                                        showInProgress(getString(R.string.in_progress_opening))
-                                        lockScreenOrientation()
-                                        handlePdfUri(single)
-                                    } ?: run {
-                                        if (viewModel.pageItems.isEmpty()) {
-                                            saveBackupSettingsAsync()
-                                        }
-                                        showInProgress(getString(R.string.in_progress_opening))
-                                        lockScreenOrientation()
-                                        handlePdfUri(single)
-                                    }
-                                }
-                            }
+                            processUris(listOf(single))
                             return
-                        }else {
+                        } else {
                             val looksImageByMime = (mtLc?.startsWith("image/") == true)
-
                             if (looksImageByMime) {
                                 Toast.makeText(this@MainActivity, getString(R.string.unsupported_image), Toast.LENGTH_LONG).show()
                                 return
@@ -1050,110 +1102,17 @@ class MainActivity : AppCompatActivity() {
                     val single = intent.getParcelableCompat(Intent.EXTRA_STREAM)
                     if (single != null) {
                         val mtLc = try { contentResolver.getType(single)?.lowercase(Locale.ROOT) } catch (_: Exception) { null }
-                        val nameLc = try { extractFileName(single).lowercase(Locale.ROOT) } catch (_: Exception) { ""
-                        }
+                        val nameLc = try { extractFileName(single).lowercase(Locale.ROOT) } catch (_: Exception) { "" }
                         if (isSupportedImageMime(mtLc) || isSupportedImageFileName(nameLc)) {
-                            run {
-                                val decor = window?.decorView
-                                val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
-                                if (isWarmStart) {
-                                    if (viewModel.pageItems.isEmpty()) {
-                                        saveBackupSettingsAsync()
-                                    }
-                                    showInProgress(getString(R.string.in_progress_opening))
-                                    lockScreenOrientation()
-                                    handlePdfUri(single)
-                                } else {
-                                    decor?.post {
-                                        if (viewModel.pageItems.isEmpty()) {
-                                            saveBackupSettingsAsync()
-                                        }
-                                        showInProgress(getString(R.string.in_progress_opening))
-                                        lockScreenOrientation()
-                                        handlePdfUri(single)
-                                    } ?: run {
-                                        if (viewModel.pageItems.isEmpty()) {
-                                            saveBackupSettingsAsync()
-                                        }
-                                        showInProgress(getString(R.string.in_progress_opening))
-                                        lockScreenOrientation()
-                                        handlePdfUri(single)
-                                    }
-                                }
-                            }
+                            processUris(listOf(single))
                             return
-                        }else {
+                        } else {
                             val looksImageByMime = (mtLc?.startsWith("image/") == true)
-
                             if (looksImageByMime) {
                                 Toast.makeText(this@MainActivity, getString(R.string.unsupported_image), Toast.LENGTH_LONG).show()
                                 return
                             }
                         }
-                    }
-                }
-            }
-            return
-        }
-
-        if (collected.isEmpty()) return
-
-        if (collected.size == 1) {
-            val only = collected.first()
-            run {
-                val decor = window?.decorView
-                val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
-                if (isWarmStart) {
-                    if (viewModel.pageItems.isEmpty()) {
-                        saveBackupSettingsAsync()
-                    }
-                    showInProgress(getString(R.string.in_progress_opening))
-                    lockScreenOrientation()
-                    handlePdfUri(only)
-                } else {
-                    decor?.post {
-                        if (viewModel.pageItems.isEmpty()) {
-                            saveBackupSettingsAsync()
-                        }
-                        showInProgress(getString(R.string.in_progress_opening))
-                        lockScreenOrientation()
-                        handlePdfUri(only)
-                    } ?: run {
-                        if (viewModel.pageItems.isEmpty()) {
-                            saveBackupSettingsAsync()
-                        }
-                        showInProgress(getString(R.string.in_progress_opening))
-                        lockScreenOrientation()
-                        handlePdfUri(only)
-                    }
-                }
-            }
-        } else {
-            run {
-                val decor = window?.decorView
-                val isWarmStart = try { decor?.isShown == true && hasWindowFocus() } catch (_: Exception) { false }
-                if (isWarmStart) {
-                    if (viewModel.pageItems.isEmpty()) {
-                        saveBackupSettingsAsync()
-                    }
-                    showInProgress(getString(R.string.in_progress_opening))
-                    lockScreenOrientation()
-                    handlePdfUrisBatch(collected.toList())
-                } else {
-                    decor?.post {
-                        if (viewModel.pageItems.isEmpty()) {
-                            saveBackupSettingsAsync()
-                        }
-                        showInProgress(getString(R.string.in_progress_opening))
-                        lockScreenOrientation()
-                        handlePdfUrisBatch(collected.toList())
-                    } ?: run {
-                        if (viewModel.pageItems.isEmpty()) {
-                            saveBackupSettingsAsync()
-                        }
-                        showInProgress(getString(R.string.in_progress_opening))
-                        lockScreenOrientation()
-                        handlePdfUrisBatch(collected.toList())
                     }
                 }
             }
@@ -1166,9 +1125,11 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_opening))
         lockScreenOrientation()
 
-        if (viewModel.pageItems.isEmpty()) {
-            saveBackupSettingsAsync()
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
         }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
@@ -1178,7 +1139,7 @@ class MainActivity : AppCompatActivity() {
             (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val oldPageCount = sourceTempPageCount()
 
@@ -1218,6 +1179,8 @@ class MainActivity : AppCompatActivity() {
                             try {
                                 appendPdfToSourceTemp(tempSrc, passwordBytes)
                                 break
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 if (!isBadPassword(e)) throw e
 
@@ -1271,6 +1234,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.error_loading_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -1283,6 +1248,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -1896,7 +1863,7 @@ class MainActivity : AppCompatActivity() {
             btnRemove.setOnClickListener {
                 val checkedPosition = listView.checkedItemPosition
                 if (checkedPosition != ListView.INVALID_POSITION && checkedPosition >= 4) {
-                    lifecycleScope.launch(Dispatchers.IO) {
+                    val job = lifecycleScope.launch(Dispatchers.IO) {
                         val fileToDelete = signatureFiles[checkedPosition - 4]
                         val deleted = fileToDelete.delete()
                         withContext(Dispatchers.Main) {
@@ -1908,6 +1875,8 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    activeJobs.add(job)
+                    job.invokeOnCompletion { activeJobs.remove(job) }
                 }
             }
 
@@ -2623,6 +2592,12 @@ class MainActivity : AppCompatActivity() {
 
         updateFileNameHintBasedOnRowsCols()
         validateInputs()
+
+        lifecycleScope.launch {
+            backupSelectionState()
+
+            backupInitialState()
+        }
     }
 
     private fun loadSettings(type: String) {
@@ -2922,7 +2897,8 @@ class MainActivity : AppCompatActivity() {
             ?.resetForNewDocument("$reason|${System.nanoTime()}")
     }
 
-    private fun showInProgressUpdateUI(message: String = getString(R.string.in_progress_ui),
+    private fun showInProgressUpdateUI(
+        message: String = getString(R.string.in_progress_ui),
     ) {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_ui) }
 
@@ -2959,18 +2935,48 @@ class MainActivity : AppCompatActivity() {
         window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
     }
 
-    private fun saveBackupSettingsAsync() {
-        lifecycleScope.launch(Dispatchers.IO) {
+    private suspend fun backupSelectionState() {
+        withContext(Dispatchers.IO) {
+            val selected = viewModel.pageItems.mapIndexedNotNull { idx, item -> if (item.isSelected) idx else null }
+                .joinToString(",")
+            getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE).edit {
+                remove(KEY_BACKUP_SELECTED)
+                putString(KEY_BACKUP_SELECTED, selected)
+            }
+        }
+    }
+
+    private suspend fun backupInitialState() {
+        withContext(Dispatchers.IO) {
             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+
+            val rows = numberOfRows.text.toString()
+            val columns = numberOfColumns.text.toString()
+            val marginVal = margin.text.toString()
+            val isPortrait = portrait.isChecked
+            val drawFrame = drawFrameSwitch.isChecked
+            val scale = scaleSwitch.isChecked
+            val fit = fitSwitch.isChecked
+            val rotation = sourceRotation.joinToString(",")
+
             prefs.edit {
-                putString(KEY_BACKUP_ROWS, numberOfRows.text.toString())
-                putString(KEY_BACKUP_COLUMNS, numberOfColumns.text.toString())
-                putString(KEY_BACKUP_MARGIN, margin.text.toString())
-                putBoolean(KEY_BACKUP_ORIENTATION, portrait.isChecked)
-                putBoolean(KEY_BACKUP_DRAW_FRAME, drawFrameSwitch.isChecked)
-                putBoolean(KEY_BACKUP_SCALE, scaleSwitch.isChecked)
-                putBoolean(KEY_BACKUP_FIT, fitSwitch.isChecked)
-                putString(KEY_BACKUP_ROTATION, sourceRotation.joinToString(","))
+                remove(KEY_BACKUP_ROWS)
+                remove(KEY_BACKUP_COLUMNS)
+                remove(KEY_BACKUP_MARGIN)
+                remove(KEY_BACKUP_ORIENTATION)
+                remove(KEY_BACKUP_DRAW_FRAME)
+                remove(KEY_BACKUP_SCALE)
+                remove(KEY_BACKUP_FIT)
+                remove(KEY_BACKUP_ROTATION)
+
+                putString(KEY_BACKUP_ROWS, rows)
+                putString(KEY_BACKUP_COLUMNS, columns)
+                putString(KEY_BACKUP_MARGIN, marginVal)
+                putBoolean(KEY_BACKUP_ORIENTATION, isPortrait)
+                putBoolean(KEY_BACKUP_DRAW_FRAME, drawFrame)
+                putBoolean(KEY_BACKUP_SCALE, scale)
+                putBoolean(KEY_BACKUP_FIT, fit)
+                putString(KEY_BACKUP_ROTATION, rotation)
             }
         }
     }
@@ -3013,6 +3019,10 @@ class MainActivity : AppCompatActivity() {
                     sourceRotation = IntArray(0)
                 }
 
+                runCatching {
+                    lastBuiltNupConfig = currentNupConfigFromInputs()
+                }
+
             } finally {
                 suppressNup = false
             }
@@ -3026,60 +3036,70 @@ class MainActivity : AppCompatActivity() {
     private fun cancelLongRunningWorkAndCleanup() {
         isSigningCancelled = true
 
-        lifecycleScope.coroutineContext.cancelChildren()
+        activeJobs.forEach { it.cancel() }
 
         isPlpRebuilding = false
         isLoadingSettingsProfile = false
 
-        val selectedIdxBeforeCancel = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-            .toSet()
+        lifecycleScope.launch {
+            activeJobs.joinAll()
+            activeJobs.clear()
 
-        val sourceBackup = File(cacheDir, SOURCE_TEMP_COPY_NAME)
-        val plpBackup = File(cacheDir, PLP_TEMP_COPY_NAME)
-
-        cacheDir.listFiles()?.forEach { f ->
-            if (f != sourceBackup && f != plpBackup) {
-                runCatching { f.delete() }
+            val selectedIdxBeforeCancel = run {
+                val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                sp.getString(KEY_BACKUP_SELECTED, "")
+                    ?.split(',')
+                    ?.mapNotNull { it.toIntOrNull() }
+                    ?.toSet()
+                    ?: emptySet()
             }
-        }
 
-        if (sourceBackup.exists()) {
-            val sourceFile = sourceTempFile()
-            runCatching {
-                FileInputStream(sourceBackup).use { input ->
-                    FileOutputStream(sourceFile, false).use { output ->
-                        input.copyTo(output)
+            val sourceBackup = File(cacheDir, SOURCE_TEMP_COPY_NAME)
+            val plpBackup = File(cacheDir, PLP_TEMP_COPY_NAME)
+
+            cacheDir.listFiles()?.forEach { f ->
+                if (f != sourceBackup && f != plpBackup) {
+                    runCatching { f.delete() }
+                }
+            }
+
+            if (sourceBackup.exists()) {
+                val sourceFile = sourceTempFile()
+                runCatching {
+                    FileInputStream(sourceBackup).use { input ->
+                        FileOutputStream(sourceFile, false).use { output ->
+                            input.copyTo(output)
+                        }
                     }
                 }
+
+                runCatching { sourceBackup.delete() }
             }
 
-            runCatching { sourceBackup.delete() }
-        }
-
-        if (plpBackup.exists()) {
-            val plpFile = plpTempFile()
-            runCatching {
-                FileInputStream(plpBackup).use { input ->
-                    FileOutputStream(plpFile, false).use { output ->
-                        input.copyTo(output)
+            if (plpBackup.exists()) {
+                val plpFile = plpTempFile()
+                runCatching {
+                    FileInputStream(plpBackup).use { input ->
+                        FileOutputStream(plpFile, false).use { output ->
+                            input.copyTo(output)
+                        }
                     }
                 }
+
+                runCatching { plpBackup.delete() }
             }
 
-            runCatching { plpBackup.delete() }
-        }
-
-        loadBackupSettingsAndValidate {
-            reloadThumbnailsFromPlp(
-                restorePrevious = true,
-                indicesToSelect = selectedIdxBeforeCancel,
-                releaseUiAtStart = false,
-                onStarted = {
-                    unlockScreenOrientation()
-                    hideInProgressIfShownUpdateUI()
-                }
-            )
+            loadBackupSettingsAndValidate {
+                reloadThumbnailsFromPlp(
+                    restorePrevious = true,
+                    indicesToSelect = selectedIdxBeforeCancel,
+                    releaseUiAtStart = false,
+                    onStarted = {
+                        unlockScreenOrientation()
+                        hideInProgressIfShownUpdateUI()
+                    }
+                )
+            }
         }
     }
 
@@ -3170,6 +3190,10 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             regeneratePlpAsyncAndReloadThumbnails()
+        } else {
+            lifecycleScope.launch {
+                backupInitialState()
+            }
         }
     }
 
@@ -3228,9 +3252,11 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_opening))
         lockScreenOrientation()
 
-        if (viewModel.pageItems.isEmpty()) {
-            saveBackupSettingsAsync()
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
         }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
@@ -3240,7 +3266,7 @@ class MainActivity : AppCompatActivity() {
             (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val mtLc = try { contentResolver.getType(uri)?.lowercase(Locale.ROOT) } catch (_: Exception) { null }
                 val nameLcForType = try { extractFileName(uri).lowercase(Locale.ROOT) } catch (_: Exception) { "" }
@@ -3293,6 +3319,8 @@ class MainActivity : AppCompatActivity() {
                             try {
                                 appendPdfToSourceTemp(tempSrc, passwordBytes)
                                 break
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 if (!isBadPassword(e)) throw e
 
@@ -3349,6 +3377,8 @@ class MainActivity : AppCompatActivity() {
 
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.error_loading_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -3361,6 +3391,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun isSupportedImageMime(mtLc: String?): Boolean {
@@ -3908,6 +3940,12 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_adding_empty_page))
         lockScreenOrientation()
 
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
 
@@ -3916,7 +3954,7 @@ class MainActivity : AppCompatActivity() {
             (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val source = sourceTempFile()
 
@@ -4009,6 +4047,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_add_empty_page_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4021,6 +4061,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private suspend fun createTempPdfInternal() = withContext(Dispatchers.IO) {
@@ -4044,6 +4086,12 @@ class MainActivity : AppCompatActivity() {
 
         showInProgress(getString(R.string.in_progress_page_layout))
         lockScreenOrientation()
+
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
@@ -4073,7 +4121,7 @@ class MainActivity : AppCompatActivity() {
                 selectedPages.map { p -> (p - 1) / newPer }.toSet()
             } else emptySet()
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 createTempPdfInternal()
                 withContext(Dispatchers.Main) {
@@ -4095,6 +4143,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_build_pages_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4109,6 +4159,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun clearThumbnails() {
@@ -4140,7 +4192,7 @@ class MainActivity : AppCompatActivity() {
 
         clearThumbnails()
 
-        lifecycleScope.launch {
+        val job = lifecycleScope.launch {
             val items = withContext(Dispatchers.IO) {
                 try {
                     val plp = plpTempFile()
@@ -4266,6 +4318,8 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     list
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     emptyList()
                 }
@@ -4313,7 +4367,22 @@ class MainActivity : AppCompatActivity() {
             }
 
             updateButtonsState()
+
+            backupInitialState()
+
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val srcCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
+                    if (srcCopy.exists()) srcCopy.delete()
+                }
+                runCatching {
+                    val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
+                    if (plpCopy.exists()) plpCopy.delete()
+                }
+            }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun mappingConfig(): NupConfig {
@@ -4339,7 +4408,7 @@ class MainActivity : AppCompatActivity() {
         val ordered = viewModel.pageItems.toList()
         val per = perGroup()
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val srcFile = sourceTempFile()
                 if (!srcFile.exists()) {
@@ -4452,6 +4521,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.reorder_failed_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4464,6 +4535,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun rotateLeftPlpPageGroupAndMirrorSource(plpIndex: Int) {
@@ -4486,10 +4559,16 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_rotation))
         lockScreenOrientation()
 
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
         val selectedIdxBefore = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val per = perGroup()
                 if (sourceRotation.size != total) {
@@ -4528,6 +4607,8 @@ class MainActivity : AppCompatActivity() {
                     updateButtonsState()
                 }
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4540,6 +4621,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
@@ -4550,6 +4633,12 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_delete))
         lockScreenOrientation()
 
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
         val selectedIdxBefore = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
 
@@ -4557,7 +4646,7 @@ class MainActivity : AppCompatActivity() {
             .filter { it != plpIndex }
             .map { if (it > plpIndex) it - 1 else it }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val source = sourceTempFile()
 
@@ -4676,6 +4765,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_delete_page_group_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4688,6 +4779,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun deleteSelectedPlpGroups() {
@@ -4703,7 +4796,13 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_delete))
         lockScreenOrientation()
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val per = perGroup()
                 val source = sourceTempFile()
@@ -4828,6 +4927,8 @@ class MainActivity : AppCompatActivity() {
 
                     updateButtonsState()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.failed_to_delete_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -4840,6 +4941,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun exportNamedOutputPdf(plp: File): File {
@@ -4905,7 +5008,13 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_pdf_reading))
         lockScreenOrientation()
 
-        lifecycleScope.launch {
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch {
             try {
                 val plp = withContext(Dispatchers.IO) {
                     val f = plpTempFile()
@@ -5017,19 +5126,29 @@ class MainActivity : AppCompatActivity() {
                         }, 500)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 hideInProgressIfShown()
                 unlockScreenOrientation()
                 Toast.makeText(this@MainActivity, getString(R.string.failed_to_open_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun printNupPdf() {
         showInProgress(getString(R.string.in_progress_print))
         lockScreenOrientation()
 
-        lifecycleScope.launch {
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch {
             try {
                 val (namedPath, namedName) = withContext(Dispatchers.IO) {
                     val plp = run {
@@ -5055,6 +5174,8 @@ class MainActivity : AppCompatActivity() {
                 val adapter = PdfDocumentAdapter(namedPath, namedName)
                 printManager.print(namedName, adapter, PrintAttributes.Builder().build())
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 hideInProgressIfShown()
                 unlockScreenOrientation()
@@ -5065,13 +5186,21 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun saveNupPdf() {
         showInProgress(getString(R.string.in_progress_save))
         lockScreenOrientation()
 
-        lifecycleScope.launch {
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch {
             try {
                 val outputPasswordBytes: ByteArray? = if (passwordOutCb.isChecked) {
                     val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
@@ -5113,6 +5242,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 saveDocumentLauncher.launch(intent)
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 hideInProgressIfShown()
                 unlockScreenOrientation()
@@ -5123,13 +5254,21 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun shareNupPdf() {
         showInProgress(getString(R.string.in_progress_send))
         lockScreenOrientation()
 
-        lifecycleScope.launch {
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch {
             try {
                 val outputPasswordBytes: ByteArray? = if (passwordOutCb.isChecked) {
                     val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
@@ -5164,6 +5303,8 @@ class MainActivity : AppCompatActivity() {
                 unlockScreenOrientation()
                 sharePdfWithViewOptions(uri)
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 hideInProgressIfShown()
                 unlockScreenOrientation()
@@ -5174,6 +5315,8 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private suspend fun promptForPasswordForOutput(titleResId: Int, errorHintResId: Int? = null): String? =
@@ -5334,7 +5477,6 @@ class MainActivity : AppCompatActivity() {
                 FileOutputStream(outFile).use {
 
                 }
-                saveBackupSettingsAsync()
                 return
             }
 
@@ -5715,8 +5857,6 @@ class MainActivity : AppCompatActivity() {
 
             partFiles.forEach { runCatching { it.delete() } }
 
-            saveBackupSettingsAsync()
-
         } finally {
             if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
         }
@@ -5993,9 +6133,15 @@ class MainActivity : AppCompatActivity() {
         showInProgress(getString(R.string.in_progress_signing))
         lockScreenOrientation()
 
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             val isLand = landscape.isChecked
             val a4Wmm = if (isLand) 297f else 210f
             val a4Hmm = if (isLand) 210f else 297f
@@ -6312,6 +6458,11 @@ class MainActivity : AppCompatActivity() {
                     runStart?.let { copyRange1BasedPaged(plp.absolutePath, it, totalPlpPages) }
                 }
 
+                if (isSigningCancelled) {
+                    runCatching { plpWork.delete() }
+                    return@launch
+                }
+
                 if (plp.exists()) plp.delete()
                 plpWork.renameTo(plp)
 
@@ -6324,11 +6475,17 @@ class MainActivity : AppCompatActivity() {
                     updateSignatureInputFilters()
                 }
 
+                if (isSigningCancelled) {
+                    return@launch
+                }
+
                 updateSourceWithSignedGroups(signedList){
                     hideInProgressIfShown()
                     unlockScreenOrientation()
                 }
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.signing_failed_with_msg, e.message), Toast.LENGTH_LONG).show()
@@ -6336,12 +6493,15 @@ class MainActivity : AppCompatActivity() {
                     unlockScreenOrientation()
                 }
             } finally {
+                tmpSigned.values.forEach { runCatching { it.delete() } }
                 withContext(Dispatchers.Main) {
                     if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
                     unlockScreenOrientation()
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun updateSourceWithSignedGroups(
@@ -6349,6 +6509,13 @@ class MainActivity : AppCompatActivity() {
         onReloadStarted: (() -> Unit)? = null
     ) {
         try {
+            if (isSigningCancelled) {
+                runCatching {
+                    signedList.forEach { (_, path) -> runCatching { File(path).delete() } }
+                }
+                return
+            }
+
             val srcFile = sourceTempFile()
             if (!srcFile.exists()) return
 
@@ -6387,6 +6554,10 @@ class MainActivity : AppCompatActivity() {
                 var runStart: Int? = null
 
                 while (p <= totalPages) {
+                    if (isSigningCancelled) {
+                        return
+                    }
+
                     val groupIndex = (p - 1) / per
                     val replPath = signedMap[groupIndex]
 
@@ -6410,6 +6581,11 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 runStart?.let { copyRange1BasedPaged(srcFile.absolutePath, destSrcDoc, it, totalPages) }
+            }
+
+            if (isSigningCancelled) {
+                runCatching { outWorkSrc.delete() }
+                return
             }
 
             if (srcFile.exists()) srcFile.delete()
@@ -6436,7 +6612,9 @@ class MainActivity : AppCompatActivity() {
                 signedList.forEach { (_, path) -> runCatching { File(path).delete() } }
             }
 
-            scheduleNupRebuild(onReloadStarted)
+            if (!isSigningCancelled) {
+                scheduleNupRebuild(onReloadStarted)
+            }
         }
     }
 
@@ -6449,7 +6627,7 @@ class MainActivity : AppCompatActivity() {
 
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        val job = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 createTempPdfInternal()
             } finally {
@@ -6475,6 +6653,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private class SimpleTextWatcher(private val cb: () -> Unit) : TextWatcher {
