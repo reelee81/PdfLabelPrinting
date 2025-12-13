@@ -4,9 +4,7 @@ build/
 app/build/
 .externalNativeBuild/
 .cxx/
-app/release/*
-*.apk
-!app/release/app-release.apk
+app/release/
 
 # Local config
 local.properties
