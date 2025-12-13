@@ -7070,6 +7070,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         AppCompatDelegate.setDefaultNightMode(nightMode)
+
+        if (nightMode == AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM) {
+            window.decorView.post {
+                runCatching { delegate.applyDayNight() }
+                runCatching { recreate() }
+            }
+        }
     }
 }
 

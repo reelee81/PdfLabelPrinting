@@ -174,7 +174,7 @@ class ThumbnailAdapter(
                         ?: throw IllegalArgumentException(context.getString(R.string.cannot_open_uri, uri))
                 }
             PdfRenderer(pfd)
-        }
+        }!!
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
@@ -300,7 +300,7 @@ class ThumbnailAdapter(
         val task = KeyedFutureTask(key) {
             try {
                 val renderer = getOrCreateRenderer(context, filePath)
-                val lock = rendererLocks.computeIfAbsent(filePath) { ReentrantLock(true) }
+                val lock = rendererLocks.computeIfAbsent(filePath) { ReentrantLock(true) }!!
 
                 var produced: Bitmap?
                 lock.lock()
@@ -519,7 +519,7 @@ class ThumbnailAdapter(
                         if (prefetchPaused || Thread.currentThread().isInterrupted) return@Runnable
 
                         val renderer = getOrCreateRenderer(context, info.filePath)
-                        val lock = rendererLocks.computeIfAbsent(info.filePath) { ReentrantLock(true) }
+                        val lock = rendererLocks.computeIfAbsent(info.filePath) { ReentrantLock(true) }!!
 
                         var producedBmp: Bitmap?
                         lock.lock()
