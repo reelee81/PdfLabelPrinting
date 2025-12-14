@@ -137,9 +137,11 @@ import java.io.IOException
 import java.io.StringReader
 import java.io.StringWriter
 import java.text.SimpleDateFormat
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.Date
 import java.util.Locale
 import java.util.zip.Deflater
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.math.floor
 import kotlin.math.max
@@ -151,7 +153,6 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.cancellation.CancellationException
 
 class MainActivity : AppCompatActivity() {
 
@@ -296,9 +297,21 @@ class MainActivity : AppCompatActivity() {
         val scaleIndividually: Boolean,
         val fitIndividually: Boolean
     )
+
+    private data class InitialStateSnapBackup(
+        val rows: String,
+        val columns: String,
+        val marginVal: String,
+        val isPortrait: Boolean,
+        val drawFrame: Boolean,
+        val scale: Boolean,
+        val fit: Boolean,
+        val rotation: String
+    )
+
     private var lastBuiltNupConfig: NupConfig? = null
 
-    private val activeJobs = mutableListOf<Job>()
+    private val activeJobs = CopyOnWriteArrayList<Job>()
 
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && result.data?.data != null) {
@@ -389,7 +402,7 @@ class MainActivity : AppCompatActivity() {
 
         isFirstCreate = (savedInstanceState == null)
 
-        // START Alternatív DEBUG mód ellenőrzés
+        // START Alternative DEBUG mode check
         val isDebug = try {
             (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         } catch (_: Exception) {
@@ -411,7 +424,7 @@ class MainActivity : AppCompatActivity() {
                     .build()
             )
         }
-        // STOP Alternatív DEBUG mód ellenőrzés
+        // STOP Alternative DEBUG mode check
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -2936,9 +2949,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun backupSelectionState() {
-        withContext(Dispatchers.IO) {
-            val selected = viewModel.pageItems.mapIndexedNotNull { idx, item -> if (item.isSelected) idx else null }
+        val selected = withContext(Dispatchers.Main.immediate) {
+            viewModel.pageItems
+                .mapIndexedNotNull { idx, item -> if (item.isSelected) idx else null }
                 .joinToString(",")
+        }
+
+        withContext(Dispatchers.IO) {
             getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE).edit {
                 remove(KEY_BACKUP_SELECTED)
                 putString(KEY_BACKUP_SELECTED, selected)
@@ -2947,18 +2964,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun backupInitialState() {
+        val snap = withContext(Dispatchers.Main.immediate) {
+            InitialStateSnapBackup(
+                rows = numberOfRows.text.toString(),
+                columns = numberOfColumns.text.toString(),
+                marginVal = margin.text.toString(),
+                isPortrait = portrait.isChecked,
+                drawFrame = drawFrameSwitch.isChecked,
+                scale = scaleSwitch.isChecked,
+                fit = fitSwitch.isChecked,
+                rotation = sourceRotation.joinToString(",")
+            )
+        }
+
         withContext(Dispatchers.IO) {
             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-
-            val rows = numberOfRows.text.toString()
-            val columns = numberOfColumns.text.toString()
-            val marginVal = margin.text.toString()
-            val isPortrait = portrait.isChecked
-            val drawFrame = drawFrameSwitch.isChecked
-            val scale = scaleSwitch.isChecked
-            val fit = fitSwitch.isChecked
-            val rotation = sourceRotation.joinToString(",")
-
             prefs.edit {
                 remove(KEY_BACKUP_ROWS)
                 remove(KEY_BACKUP_COLUMNS)
@@ -2969,14 +2989,14 @@ class MainActivity : AppCompatActivity() {
                 remove(KEY_BACKUP_FIT)
                 remove(KEY_BACKUP_ROTATION)
 
-                putString(KEY_BACKUP_ROWS, rows)
-                putString(KEY_BACKUP_COLUMNS, columns)
-                putString(KEY_BACKUP_MARGIN, marginVal)
-                putBoolean(KEY_BACKUP_ORIENTATION, isPortrait)
-                putBoolean(KEY_BACKUP_DRAW_FRAME, drawFrame)
-                putBoolean(KEY_BACKUP_SCALE, scale)
-                putBoolean(KEY_BACKUP_FIT, fit)
-                putString(KEY_BACKUP_ROTATION, rotation)
+                putString(KEY_BACKUP_ROWS, snap.rows)
+                putString(KEY_BACKUP_COLUMNS, snap.columns)
+                putString(KEY_BACKUP_MARGIN, snap.marginVal)
+                putBoolean(KEY_BACKUP_ORIENTATION, snap.isPortrait)
+                putBoolean(KEY_BACKUP_DRAW_FRAME, snap.drawFrame)
+                putBoolean(KEY_BACKUP_SCALE, snap.scale)
+                putBoolean(KEY_BACKUP_FIT, snap.fit)
+                putString(KEY_BACKUP_ROTATION, snap.rotation)
             }
         }
     }
@@ -7031,6 +7051,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshButtonsForCurrentTheme() {
+        val filledBg = AppCompatResources.getColorStateList(this, R.color.material_button_bg_color)
+        val filledText = AppCompatResources.getColorStateList(this, R.color.material_button_text_color)
+        val filledRipple = AppCompatResources.getColorStateList(this, R.color.material_button_ripple_color)
+
+        val textText = AppCompatResources.getColorStateList(this, R.color.material_textbutton_text_color)
+        val textRipple = AppCompatResources.getColorStateList(this, R.color.material_textbutton_ripple_color)
+
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+
+        fun walk(v: View) {
+            if (v is MaterialButton) {
+
+                val isFilledLike = v.backgroundTintList != null || v.background != null
+
+                if (isFilledLike) {
+                    if (filledBg != null) v.backgroundTintList = filledBg
+                    if (filledText != null) {
+                        v.setTextColor(filledText)
+                        v.iconTint = filledText
+                    }
+                    if (filledRipple != null) v.rippleColor = filledRipple
+                } else {
+                    if (textText != null) {
+                        v.setTextColor(textText)
+                        v.iconTint = textText
+                    }
+                    if (textRipple != null) v.rippleColor = textRipple
+                }
+            }
+
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) walk(v.getChildAt(i))
+            }
+        }
+
+        walk(root)
+    }
+
     private fun setThemeMode(mode: String) {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         prefs.edit { putString(KEY_THEME_MODE, mode) }
@@ -7074,6 +7133,15 @@ class MainActivity : AppCompatActivity() {
         if (nightMode == AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM) {
             window.decorView.post {
                 runCatching { delegate.applyDayNight() }
+                    .onFailure {
+
+                    }
+
+                window.decorView.postOnAnimation {
+                    if (!isFinishing && !isDestroyed) {
+                        refreshButtonsForCurrentTheme()
+                    }
+                }
             }
         }
     }
