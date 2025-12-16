@@ -1,6 +1,7 @@
 package hu.reelee81.pdflabelprinting
 
 import android.annotation.SuppressLint
+import android.app.UiModeManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -391,12 +392,25 @@ class MainActivity : AppCompatActivity() {
 
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         val theme = prefs.getString(KEY_THEME_MODE, "system") ?: "system"
-        val mode = when (theme) {
-            "light" -> AppCompatDelegate.MODE_NIGHT_NO
-            "dark" -> AppCompatDelegate.MODE_NIGHT_YES
-            else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+
+        if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
+            val uiModeManager = getSystemService(UI_MODE_SERVICE) as UiModeManager
+            val appNightMode = when (theme) {
+                "light" -> UiModeManager.MODE_NIGHT_NO
+                "dark" -> UiModeManager.MODE_NIGHT_YES
+                else -> UiModeManager.MODE_NIGHT_AUTO
+            }
+            uiModeManager.setApplicationNightMode(appNightMode)
+
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        } else {
+            val mode = when (theme) {
+                "light" -> AppCompatDelegate.MODE_NIGHT_NO
+                "dark" -> AppCompatDelegate.MODE_NIGHT_YES
+                else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            }
+            AppCompatDelegate.setDefaultNightMode(mode)
         }
-        AppCompatDelegate.setDefaultNightMode(mode)
 
         super.onCreate(savedInstanceState)
 
@@ -7051,46 +7065,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshButtonsForCurrentTheme() {
-        val filledBg = AppCompatResources.getColorStateList(this, R.color.material_button_bg_color)
-        val filledText = AppCompatResources.getColorStateList(this, R.color.material_button_text_color)
-        val filledRipple = AppCompatResources.getColorStateList(this, R.color.material_button_ripple_color)
-
-        val textText = AppCompatResources.getColorStateList(this, R.color.material_textbutton_text_color)
-        val textRipple = AppCompatResources.getColorStateList(this, R.color.material_textbutton_ripple_color)
-
-        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
-
-        fun walk(v: View) {
-            if (v is MaterialButton) {
-
-                val isFilledLike = v.backgroundTintList != null || v.background != null
-
-                if (isFilledLike) {
-                    if (filledBg != null) v.backgroundTintList = filledBg
-                    if (filledText != null) {
-                        v.setTextColor(filledText)
-                        v.iconTint = filledText
-                    }
-                    if (filledRipple != null) v.rippleColor = filledRipple
-                } else {
-                    if (textText != null) {
-                        v.setTextColor(textText)
-                        v.iconTint = textText
-                    }
-                    if (textRipple != null) v.rippleColor = textRipple
-                }
-            }
-
-            if (v is ViewGroup) {
-                for (i in 0 until v.childCount) walk(v.getChildAt(i))
-            }
-        }
-
-        walk(root)
-    }
-
-    private fun setThemeMode(mode: String) {
+    fun setThemeMode(mode: String) {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         prefs.edit { putString(KEY_THEME_MODE, mode) }
 
@@ -7128,21 +7103,18 @@ class MainActivity : AppCompatActivity() {
 
         }
 
-        AppCompatDelegate.setDefaultNightMode(nightMode)
-
-        if (nightMode == AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM) {
-            window.decorView.post {
-                runCatching { delegate.applyDayNight() }
-                    .onFailure {
-
-                    }
-
-                window.decorView.postOnAnimation {
-                    if (!isFinishing && !isDestroyed) {
-                        refreshButtonsForCurrentTheme()
-                    }
-                }
+        if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
+            val uiModeManager = getSystemService(UI_MODE_SERVICE) as UiModeManager
+            val appNightMode = when (mode) {
+                "light" -> UiModeManager.MODE_NIGHT_NO
+                "dark" -> UiModeManager.MODE_NIGHT_YES
+                else -> UiModeManager.MODE_NIGHT_AUTO
             }
+            uiModeManager.setApplicationNightMode(appNightMode)
+
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        } else {
+            AppCompatDelegate.setDefaultNightMode(nightMode)
         }
     }
 }
