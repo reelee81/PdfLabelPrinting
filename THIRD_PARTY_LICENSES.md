@@ -16,7 +16,7 @@ the **Apache License 2.0**:
 - `androidx.core:core-ktx:1.17.0`
 - `androidx.appcompat:appcompat:1.7.1`
 - `com.google.android.material:material:1.13.0`
-- `androidx.activity:activity:1.12.1`
+- `androidx.activity:activity:1.12.2`
 - `androidx.constraintlayout:constraintlayout:2.2.1`
 
 Many additional transitive AndroidX modules may also be pulled in at build time.

@@ -5668,10 +5668,147 @@ class MainActivity : AppCompatActivity() {
                                     processor.processPageContent(sp)
                                     val box = listener.box
                                     if (box != null) {
-                                        contentWidth  = box.width
-                                        contentHeight = box.height
-                                        contentOriginX = box.x
-                                        contentOriginY = box.y
+
+                                        var effectiveBox = box
+
+                                        val tol = 2f
+
+                                        val bLeft = box.x
+                                        val bBottom = box.y
+                                        val bRight = box.x + box.width
+                                        val bTop = box.y + box.height
+
+                                        val pLeft = sz.x
+                                        val pBottom = sz.y
+                                        val pRight = sz.x + sz.width
+                                        val pTop = sz.y + sz.height
+
+                                        val looksFullPage =
+                                            kotlin.math.abs(bLeft - pLeft) <= tol &&
+                                                    kotlin.math.abs(bBottom - pBottom) <= tol &&
+                                                    kotlin.math.abs(bRight - pRight) <= tol &&
+                                                    kotlin.math.abs(bTop - pTop) <= tol
+
+                                        val overshootsPage =
+                                            bLeft < pLeft - 0.1f || bBottom < pBottom - 0.1f || bRight > pRight + 0.1f || bTop > pTop + 0.1f
+
+                                        if (looksFullPage || overshootsPage) {
+
+                                            val listenerNoOpFiltered = object : IEventListener {
+
+                                                private var bbox: Rectangle? = null
+
+                                                private val clipBox = Rectangle(
+                                                    sz.x - tol,
+                                                    sz.y - tol,
+                                                    sz.width + 2f * tol,
+                                                    sz.height + 2f * tol
+                                                )
+
+                                                private fun intersect(a: Rectangle, b: Rectangle): Rectangle? {
+                                                    val x1 = max(a.x, b.x)
+                                                    val y1 = max(a.y, b.y)
+                                                    val x2 = min(a.x + a.width,  b.x + b.width)
+                                                    val y2 = min(a.y + a.height, b.y + b.height)
+                                                    if (x2 < x1 || y2 < y1) return null
+                                                    return Rectangle(x1, y1, x2 - x1, y2 - y1)
+                                                }
+
+                                                private fun includeRect(r: Rectangle) {
+                                                    val rr = intersect(r, clipBox) ?: return
+                                                    val cur = bbox
+                                                    if (cur == null) {
+                                                        bbox = Rectangle(rr.x, rr.y, rr.width, rr.height)
+                                                        return
+                                                    }
+                                                    val nx1 = min(cur.x, rr.x)
+                                                    val ny1 = min(cur.y, rr.y)
+                                                    val nx2 = max(cur.x + cur.width, rr.x + rr.width)
+                                                    val ny2 = max(cur.y + cur.height, rr.y + rr.height)
+                                                    bbox = Rectangle(nx1, ny1, nx2 - nx1, ny2 - ny1)
+                                                }
+
+                                                override fun eventOccurred(data: IEventData?, type: EventType?) {
+                                                    if (data == null || type == null) return
+
+                                                    when (type) {
+                                                        EventType.RENDER_TEXT -> {
+                                                            val tri = data as TextRenderInfo
+                                                            includeRect(tri.ascentLine.boundingRectangle)
+                                                            includeRect(tri.descentLine.boundingRectangle)
+                                                        }
+
+                                                        EventType.RENDER_IMAGE -> {
+                                                            val iri = data as ImageRenderInfo
+                                                            val ctm = iri.imageCtm
+                                                            val p0 = Vector(0f, 0f, 1f).cross(ctm)
+                                                            val p1 = Vector(1f, 0f, 1f).cross(ctm)
+                                                            val p2 = Vector(0f, 1f, 1f).cross(ctm)
+                                                            val p3 = Vector(1f, 1f, 1f).cross(ctm)
+
+                                                            val xs = floatArrayOf(p0.get(Vector.I1), p1.get(Vector.I1), p2.get(Vector.I1), p3.get(Vector.I1))
+                                                            val ys = floatArrayOf(p0.get(Vector.I2), p1.get(Vector.I2), p2.get(Vector.I2), p3.get(Vector.I2))
+
+                                                            var minX = xs[0]; var maxX = xs[0]
+                                                            var minY = ys[0]; var maxY = ys[0]
+                                                            for (i in 1 until 4) {
+                                                                val xx = xs[i]; val yy = ys[i]
+                                                                if (xx < minX) minX = xx
+                                                                if (xx > maxX) maxX = xx
+                                                                if (yy < minY) minY = yy
+                                                                if (yy > maxY) maxY = yy
+                                                            }
+                                                            val w = maxX - minX
+                                                            val h = maxY - minY
+                                                            if (w > 0 && h > 0) includeRect(Rectangle(minX, minY, w, h))
+                                                        }
+
+                                                        EventType.RENDER_PATH -> {
+                                                            val pri = data as PathRenderInfo
+                                                            
+                                                            if (pri.operation == PathRenderInfo.NO_OP) return
+
+                                                            val path = pri.path
+                                                            val ctm = pri.ctm
+                                                            for (sub in path.subpaths) {
+                                                                val pts = sub.piecewiseLinearApproximation ?: continue
+                                                                for (pt in pts) {
+                                                                    val v = Vector(pt.x.toFloat(), pt.y.toFloat(), 1f).cross(ctm)
+                                                                    val px = v.get(Vector.I1)
+                                                                    val py = v.get(Vector.I2)
+                                                                    if (px.isFinite() && py.isFinite()) {
+                                                                        includeRect(Rectangle(px, py, 0f, 0f))
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        else -> Unit
+                                                    }
+                                                }
+
+                                                override fun getSupportedEvents(): Set<EventType> =
+                                                    setOf(EventType.RENDER_TEXT, EventType.RENDER_IMAGE, EventType.RENDER_PATH)
+
+                                                fun getBounds(): Rectangle? = bbox
+                                            }
+
+                                            PdfCanvasProcessor(listenerNoOpFiltered).processPageContent(sp)
+                                            val box2 = listenerNoOpFiltered.getBounds()
+                                            
+                                            if (box2 != null) {
+                                                val shrinkW = box2.width < box.width - 2f
+                                                val shrinkH = box2.height < box.height - 2f
+                                                if (shrinkW || shrinkH) {
+                                                    effectiveBox = box2
+                                                }
+                                            }
+                                        }
+
+                                        contentWidth = effectiveBox.width
+                                        contentHeight = effectiveBox.height
+                                        contentOriginX = effectiveBox.x
+                                        contentOriginY = effectiveBox.y
                                         hasBoundingBox = true
                                     }
                                 }
@@ -6292,16 +6429,16 @@ class MainActivity : AppCompatActivity() {
                             if (idx < 0 || idx >= renderer.pageCount) continue
 
                             renderer.openPage(idx).use { page: PdfRenderer.Page ->
-                                val targetW: Int
-                                val targetH: Int
-                                if (!isLand) {
+                                val (targetW, targetH) = if (!isLand) {
                                     val k = refPx / page.width.toFloat()
-                                    targetW = refPx.toInt()
-                                    targetH = max(1, round(page.height * k).toInt())
+                                    val w = refPx.toInt()
+                                    val h = max(1, round(page.height * k).toInt())
+                                    w to h
                                 } else {
                                     val k = refPx / page.height.toFloat()
-                                    targetH = refPx.toInt()
-                                    targetW = max(1, round(page.width * k).toInt())
+                                    val h = refPx.toInt()
+                                    val w = max(1, round(page.width * k).toInt())
+                                    w to h
                                 }
 
                                 var pageBmp = createBitmap(
