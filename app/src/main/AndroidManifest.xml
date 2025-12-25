@@ -2,7 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="hu.reelee81.pdflabelprinting"
-    tools:ignore="Typos">
+    tools:ignore="Typos"
+    tools:targetApi="33">
 
     <uses-sdk
         android:minSdkVersion="24"
@@ -46,6 +47,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:localeConfig="@xml/locales_config"
         android:supportsRtl="true">
 
         <provider

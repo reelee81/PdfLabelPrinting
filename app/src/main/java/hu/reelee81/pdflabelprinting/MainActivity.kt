@@ -144,6 +144,7 @@ import java.util.Locale
 import java.util.zip.Deflater
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -2075,8 +2076,8 @@ class MainActivity : AppCompatActivity() {
                     parent?.requestDisallowInterceptTouchEvent(false)
 
                     val (parentX, parentY) = parentLocationOnScreen()
-                    val dx = kotlin.math.abs((ev.rawX - parentX) - downXRelToParent)
-                    val dy = kotlin.math.abs((ev.rawY - parentY) - downYRelToParent)
+                    val dx = abs((ev.rawX - parentX) - downXRelToParent)
+                    val dy = abs((ev.rawY - parentY) - downYRelToParent)
                     if (dx <= clickSlop && dy <= clickSlop) {
                         performClick()
                     }
@@ -5684,10 +5685,10 @@ class MainActivity : AppCompatActivity() {
                                         val pTop = sz.y + sz.height
 
                                         val looksFullPage =
-                                            kotlin.math.abs(bLeft - pLeft) <= tol &&
-                                                    kotlin.math.abs(bBottom - pBottom) <= tol &&
-                                                    kotlin.math.abs(bRight - pRight) <= tol &&
-                                                    kotlin.math.abs(bTop - pTop) <= tol
+                                            abs(bLeft - pLeft) <= tol &&
+                                                    abs(bBottom - pBottom) <= tol &&
+                                                    abs(bRight - pRight) <= tol &&
+                                                    abs(bTop - pTop) <= tol
 
                                         val overshootsPage =
                                             bLeft < pLeft - 0.1f || bBottom < pBottom - 0.1f || bRight > pRight + 0.1f || bTop > pTop + 0.1f

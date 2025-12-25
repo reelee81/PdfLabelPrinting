@@ -125,10 +125,5 @@
     <string name="failed_to_replace_original_pdf_with_encrypted_version">Failed to replace original PDF with encrypted version</string>
     <string name="failed_to_rename_encrypted_pdf">Failed to rename encrypted PDF</string>
     <string name="battery_optimization">Battery optimization</string>
-    <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app;
-        otherwise, the system may stop the processing when you put the app in the background or lock the screen. Different manufacturers place this setting in
-        different locations, but in general you can find it under Settings → Apps → App management → Pdf Label Printing, then look for “Power usage” or “Battery”
-        options where you can turn it on or off. Even with these adjustments, the process may still be paused on some devices because certain manufacturers are
-        very aggressive with battery saving (for example when the screen is locked), so if you want to be absolutely sure that long operations finish, stay on the
-        app screen.</string>
+    <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app; otherwise, the system may stop processing when you put the app in the background or lock the screen. Different manufacturers place this setting in different locations, but in general you can find it under Settings → Apps → Manage apps → Pdf Label Printing, then look for “Power usage” or “Battery” options where you can turn it on or off. Even then, it may still happen that the process is paused on some devices because certain manufacturers are very aggressive with battery saving (for example when the screen is locked). Therefore, if you want to be absolutely sure that long operations finish, stay on the app screen, because in that case it keeps the display awake until the processing finishes.</string>
 </resources>

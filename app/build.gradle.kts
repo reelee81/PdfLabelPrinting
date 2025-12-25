@@ -1,6 +1,20 @@
+@file:Suppress("UnstableApiUsage")
+
+import java.io.File
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+}
+
+fun parseLocalesConfig(file: File): List<String> {
+    check(file.exists()) {
+        "Missing locales_config.xml at: ${file.path}"
+    }
+    return Regex("""android:name="([^"]+)"""")
+        .findAll(file.readText())
+        .map { it.groupValues[1] }
+        .toList()
 }
 
 android {
@@ -11,8 +25,8 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "11.0"
+        versionCode = 12
+        versionName = "12.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -26,16 +40,24 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
+
     kotlin {
         jvmToolchain(17)
     }
+
     buildFeatures {
         viewBinding = true
+    }
+
+    androidResources {
+        val locales = parseLocalesConfig(file("src/main/res/xml/locales_config.xml"))
+        localeFilters += locales
     }
 }
 
