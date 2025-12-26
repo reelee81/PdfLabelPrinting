@@ -283,6 +283,9 @@ class MainActivity : AppCompatActivity() {
     private var isFirstCreate = true
     private var batchValid = true
     private var sourceRotation: IntArray = IntArray(0)
+    private var restoreImeAfterBackground = false
+    private var restoreImeAfterBackgroundEditTextId = View.NO_ID
+    private var restoreImeAfterBackgroundWasActive = false
 
     @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
@@ -1281,13 +1284,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.action == MotionEvent.ACTION_DOWN) {
+            val view = currentFocus
+            if (view is EditText) {
+                val blockingIds = setOf(
+                    R.id.number_of_rows,
+                    R.id.number_of_columns,
+                    R.id.margin,
+                    R.id.batch_page,
+                    R.id.signature_position_x,
+                    R.id.signature_position_y,
+                    R.id.file_name
+                )
+                if (view.id in blockingIds) {
+                    val outRect = Rect()
+                    view.getGlobalVisibleRect(outRect)
+                    if (!outRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                        view.clearFocus()
+
+                        run {
+                            val root = findViewById<View>(android.R.id.content)
+                            if (root != null) {
+                                val prevFocusable = root.isFocusableInTouchMode
+                                root.isFocusableInTouchMode = true
+                                root.requestFocus()
+                                root.post {
+                                    try {
+                                        root.isFocusableInTouchMode = prevFocusable
+                                    } catch (_: Exception) { }
+                                }
+                            }
+                        }
+
+                        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.hideSoftInputFromWindow(view.windowToken, 0)
+
+                        return true
+                    }
+                }
+            }
+        }
+
         var shouldHideKeyboard = false
         var targetWindowToken: IBinder? = null
 
         var focusedBefore: View? = null
-
-        var lastUpX = -1f
-        var lastUpY = -1f
 
         if (ev.action == MotionEvent.ACTION_UP) {
             currentFocus?.let { focusedView ->
@@ -1298,46 +1339,12 @@ class MainActivity : AppCompatActivity() {
                         shouldHideKeyboard = true
                         targetWindowToken = focusedView.windowToken
                         focusedBefore = focusedView
-                        lastUpX = ev.rawX
-                        lastUpY = ev.rawY
                     }
                 }
             }
         }
 
         val handled = super.dispatchTouchEvent(ev)
-
-        val newFocus = currentFocus
-
-        val switchingBetweenEditTexts = shouldHideKeyboard &&
-                (focusedBefore is EditText) &&
-                (newFocus is EditText) &&
-                (newFocus !== focusedBefore) &&
-                run {
-                    if (lastUpX < 0f || lastUpY < 0f) {
-                        false
-                    } else {
-                        val r = Rect()
-                        newFocus.getGlobalVisibleRect(r)
-                        r.contains(lastUpX.toInt(), lastUpY.toInt())
-                    }
-                }
-
-        if (switchingBetweenEditTexts) {
-            shouldHideKeyboard = false
-
-            val targetEdit: EditText = newFocus
-
-            window?.decorView?.post {
-                try {
-                    if (!targetEdit.isFocused) {
-                        targetEdit.requestFocus()
-                    }
-                    val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-                    imm.showSoftInput(targetEdit, InputMethodManager.SHOW_IMPLICIT)
-                } catch (_: Exception) { }
-            }
-        }
 
         if (shouldHideKeyboard) {
             window?.decorView?.post {
@@ -1372,6 +1379,98 @@ class MainActivity : AppCompatActivity() {
         }
 
         return handled
+    }
+
+    private fun closeEditingAndHideKeyboardNoJump(et: EditText) {
+        try {
+            if (et.isFocused) {
+                et.clearFocus()
+            }
+
+            run {
+                val root = findViewById<View>(android.R.id.content)
+                if (root != null) {
+                    val prevFocusable = root.isFocusableInTouchMode
+                    root.isFocusableInTouchMode = true
+                    root.requestFocus()
+                    root.post {
+                        try {
+                            root.isFocusableInTouchMode = prevFocusable
+                        } catch (_: Exception) { }
+                    }
+                }
+            }
+
+            window?.decorView?.post {
+                try {
+                    val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                    val token = et.windowToken ?: window?.decorView?.windowToken
+                    if (token != null) {
+                        imm.hideSoftInputFromWindow(token, 0)
+                    }
+                } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun setupEnterClosesEditTextAndHidesKeyboard(et: EditText) {
+        et.setOnEditorActionListener { _, actionId, event ->
+            val isEnter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
+
+            if (actionId == EditorInfo.IME_ACTION_DONE ||
+                actionId == EditorInfo.IME_ACTION_NEXT ||
+                isEnter
+            ) {
+                closeEditingAndHideKeyboardNoJump(et)
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private fun clearAnyEditTextFocusAfterRecreate() {
+        try {
+            var token: IBinder? = null
+
+            val focused = currentFocus
+            if (focused is EditText) {
+                token = focused.windowToken
+                if (focused.isFocused) {
+                    focused.clearFocus()
+                }
+            }
+
+            run {
+                val root = findViewById<View>(android.R.id.content)
+                if (root != null) {
+                    val prevFocusable = root.isFocusableInTouchMode
+                    root.isFocusableInTouchMode = true
+                    root.requestFocus()
+                    root.post {
+                        try {
+                            root.isFocusableInTouchMode = prevFocusable
+                        } catch (_: Exception) { }
+                    }
+                }
+            }
+
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            val t = token ?: window?.decorView?.windowToken
+            if (t != null) {
+                imm.hideSoftInputFromWindow(t, 0)
+            }
+        } catch (_: Exception) { }
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+
+        window?.decorView?.post {
+            try {
+                clearAnyEditTextFocusAfterRecreate()
+            } catch (_: Exception) { }
+        }
     }
 
     private fun numberRangeFilterNoOp(range: IntRange) = InputFilter { src, start, end, dest, dStart, dEnd ->
@@ -2419,7 +2518,57 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+
+        try {
+            if (!isChangingConfigurations) {
+                val v = currentFocus
+                if (v is EditText && v.isFocused) {
+                    restoreImeAfterBackground = true
+                    restoreImeAfterBackgroundEditTextId = v.id
+
+                    restoreImeAfterBackgroundWasActive = try {
+                        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.isActive(v)
+                    } catch (_: Exception) {
+                        true
+                    }
+                } else {
+                    restoreImeAfterBackground = false
+                    restoreImeAfterBackgroundEditTextId = View.NO_ID
+                    restoreImeAfterBackgroundWasActive = false
+                }
+            } else {
+                restoreImeAfterBackground = false
+                restoreImeAfterBackgroundEditTextId = View.NO_ID
+                restoreImeAfterBackgroundWasActive = false
+            }
+        } catch (_: Exception) { }
+
         saveCurrentSettings()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+
+        if (hasFocus) {
+            try {
+                if (restoreImeAfterBackground && restoreImeAfterBackgroundWasActive) {
+                    val v = findViewById<View>(restoreImeAfterBackgroundEditTextId)
+                    if (v is EditText && v.isFocused) {
+                        window?.decorView?.post {
+                            try {
+                                val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                                imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                            } catch (_: Exception) { }
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
+
+            restoreImeAfterBackground = false
+            restoreImeAfterBackgroundEditTextId = View.NO_ID
+            restoreImeAfterBackgroundWasActive = false
+        }
     }
 
     override fun onDestroy() {
@@ -2594,6 +2743,13 @@ class MainActivity : AppCompatActivity() {
         scaleSwitch.isChecked = scale
         fitSwitch.isChecked = fit
         fitSwitch.isEnabled = scaleSwitch.isChecked
+
+        setupEnterClosesEditTextAndHidesKeyboard(numberOfRows)
+        setupEnterClosesEditTextAndHidesKeyboard(numberOfColumns)
+        setupEnterClosesEditTextAndHidesKeyboard(margin)
+        setupEnterClosesEditTextAndHidesKeyboard(batchPage)
+        setupEnterClosesEditTextAndHidesKeyboard(signaturePosX)
+        setupEnterClosesEditTextAndHidesKeyboard(signaturePosY)
 
         val fileNameEt: EditText = findViewById(R.id.file_name)
         val defaultTemplate = getString(R.string.default_tmpl_normal)
