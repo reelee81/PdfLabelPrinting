@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center"
-    android:orientation="vertical"
     tools:ignore="SpUsage, RtlHardcoded">
 
     <com.google.android.material.textview.MaterialTextView
@@ -13,12 +12,18 @@
         style="@style/PdfLabelPrinting.TextView.Thumb"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="@dimen/dp_2" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent" />
 
     <FrameLayout
+        android:id="@+id/thumb_container"
         android:layout_width="@dimen/dp_112"
         android:layout_height="@dimen/dp_158"
-        android:layout_marginBottom="@dimen/dp_2">
+        android:layout_marginTop="@dimen/dp_2"
+        app:layout_constraintTop_toBottomOf="@id/page_number"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent">
 
         <androidx.appcompat.widget.AppCompatImageView
             android:id="@+id/iv_thumbnail"
@@ -66,5 +71,10 @@
         android:text="@string/tv_size_label_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="@dimen/dp_10" />
-</LinearLayout>
+        android:layout_marginTop="@dimen/dp_2"
+        android:layout_marginBottom="@dimen/dp_10"
+        app:layout_constraintTop_toBottomOf="@id/thumb_container"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent" />
+</androidx.constraintlayout.widget.ConstraintLayout>

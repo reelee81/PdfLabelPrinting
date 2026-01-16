@@ -4,7 +4,10 @@ import java.io.File
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+}
+
+kotlin {
+    jvmToolchain(17)
 }
 
 fun parseLocalesConfig(file: File): List<String> {
@@ -25,8 +28,8 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 36
-        versionCode = 13
-        versionName = "13.0"
+        versionCode = 14
+        versionName = "14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,10 +48,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
-    }
-
-    kotlin {
-        jvmToolchain(17)
     }
 
     buildFeatures {
@@ -76,5 +75,6 @@ dependencies {
     implementation(libs.itextpdf.bc.adapter)
     implementation(libs.itextpdf.bc.connector)
     implementation(libs.androidx.pdf.viewer)
+    implementation(libs.androidx.window)
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
 }

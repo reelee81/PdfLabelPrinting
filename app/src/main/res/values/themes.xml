@@ -303,10 +303,10 @@
 
     <style name="PdfLabelPrinting.Dialog.Background.Radius" parent="MaterialAlertDialog.Material3">
         <item name="backgroundTint">@color/alertdialog_background_color</item>
-        <item name="backgroundInsetStart">@dimen/dp_16</item>
-        <item name="backgroundInsetEnd">@dimen/dp_16</item>
-        <item name="backgroundInsetTop">@dimen/dp_56</item>
-        <item name="backgroundInsetBottom">@dimen/dp_56</item>
+        <item name="backgroundInsetStart">@dimen/dp_0</item>
+        <item name="backgroundInsetEnd">@dimen/dp_0</item>
+        <item name="backgroundInsetTop">@dimen/dp_0</item>
+        <item name="backgroundInsetBottom">@dimen/dp_0</item>
 
         <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.PdfLabelPrinting.Dialog.Radius</item>
     </style>

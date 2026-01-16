@@ -19,10 +19,20 @@ class PdfProcessingForegroundService : Service() {
         private const val EXTRA_MESSAGE = "EXTRA_MESSAGE"
 
         fun start(context: Context, message: String) {
-            val intent = Intent(context, PdfProcessingForegroundService::class.java).apply {
+            val appCtx = context.applicationContext
+            val intent = Intent(appCtx, PdfProcessingForegroundService::class.java).apply {
                 putExtra(EXTRA_MESSAGE, message)
             }
-            ContextCompat.startForegroundService(context, intent)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    appCtx.startService(intent)
+                } catch (_: IllegalStateException) {
+                    ContextCompat.startForegroundService(appCtx, intent)
+                }
+            } else {
+                appCtx.startService(intent)
+            }
         }
 
         fun stop(context: Context) {

@@ -1,6 +1,5 @@
 [versions]
-agp = "8.13.2"
-kotlin = "2.3.0"
+agp = "9.0.0"
 coreKtx = "1.17.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
@@ -9,9 +8,10 @@ appcompat = "1.7.1"
 material = "1.13.0"
 activity = "1.12.2"
 constraintlayout = "2.2.1"
-itextpdf = "9.4.0"
+itextpdf = "9.5.0"
 pdfviewer = "1.0.0-alpha12"
 desugar = "2.1.5"
+window = "1.5.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -28,7 +28,7 @@ itextpdf-bc-adapter  = { group = "com.itextpdf.android", name = "bouncy-castle-a
 itextpdf-bc-connector = { group = "com.itextpdf.android", name = "bouncy-castle-connector-android", version.ref = "itextpdf" }
 androidx-pdf-viewer = { group = "androidx.pdf", name = "pdf-viewer-fragment", version.ref = "pdfviewer" }
 desugar-jdk-libs-nio = { module = "com.android.tools:desugar_jdk_libs_nio", version.ref = "desugar" }
+androidx-window = { module = "androidx.window:window", version.ref = "window" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

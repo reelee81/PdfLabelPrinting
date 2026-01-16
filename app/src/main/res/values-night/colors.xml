@@ -5,6 +5,7 @@
     <color name="transparent">#00000000</color>
     <color name="app_background_color">#FF000000</color>
     <color name="bitmap_tv_background_color">#FF333333</color>
+    <color name="dialog_overlay_background_color">#80000000</color>
     <color name="love_50">#FFF59393</color>
     <color name="gummy_150">#FF7FB0FF</color>
     <color name="gummy_125">#FF4089FF</color>

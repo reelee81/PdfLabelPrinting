@@ -6,7 +6,6 @@
     tools:targetApi="33">
 
     <uses-sdk
-        android:minSdkVersion="24"
         tools:overrideLibrary="androidx.pdf, androidx.pdf.document.service, androidx.pdf.viewer.fragment" />
 
     <uses-permission
@@ -62,6 +61,7 @@
 
         <activity
             android:name="hu.reelee81.pdflabelprinting.MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode"
             android:windowSoftInputMode="stateHidden|adjustResize"
             android:exported="true"
             android:launchMode="singleTask"

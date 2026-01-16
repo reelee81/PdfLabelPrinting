@@ -10,6 +10,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.LruCache
@@ -84,7 +86,9 @@ class ThumbnailAdapter(
     private val renderers = ConcurrentHashMap<String, PdfRenderer>()
     private val rendererLocks = ConcurrentHashMap<String, ReentrantLock>()
     private val prefetchLimiter = Semaphore(2, true)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
+    @Volatile private var onThumbnailCachedListener: ((String) -> Unit)? = null
     @Volatile private var prefetchPaused = false
     @Volatile private var lastScrollNanos: Long = 0L
 
@@ -105,6 +109,26 @@ class ThumbnailAdapter(
     override fun getItemId(position: Int): Long {
         if (position < 0 || position >= items.size) return RecyclerView.NO_ID
         return ("$docKey|${items[position].pageIndex}").hashCode().toLong()
+    }
+
+    fun setOnThumbnailCachedListener(listener: ((String) -> Unit)?) {
+        onThumbnailCachedListener = listener
+    }
+
+    fun getCacheKeyForPosition(position: Int): String? {
+        if (position < 0 || position >= items.size) return null
+        return "$docKey|${items[position].pageIndex}"
+    }
+
+    fun isThumbnailCachedByKey(key: String): Boolean {
+        val bmp = cache.get(key)
+        return bmp != null && !bmp.isRecycled
+    }
+
+    private fun notifyThumbnailCached(key: String) {
+        mainHandler.post {
+            onThumbnailCachedListener?.invoke(key)
+        }
     }
 
     private fun closeRendererAsync(filePath: String, renderer: PdfRenderer) {
@@ -174,7 +198,7 @@ class ThumbnailAdapter(
                         ?: throw IllegalArgumentException(context.getString(R.string.cannot_open_uri, uri))
                 }
             PdfRenderer(pfd)
-        }!!
+        }
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
@@ -300,7 +324,7 @@ class ThumbnailAdapter(
         val task = KeyedFutureTask(key) {
             try {
                 val renderer = getOrCreateRenderer(context, filePath)
-                val lock = rendererLocks.computeIfAbsent(filePath) { ReentrantLock(true) }!!
+                val lock = rendererLocks.computeIfAbsent(filePath) { ReentrantLock(true) }
 
                 var produced: Bitmap?
                 lock.lock()
@@ -325,7 +349,9 @@ class ThumbnailAdapter(
 
                 produced.let { bmp ->
                     cache.put(key, bmp)
+                    notifyThumbnailCached(key)
                     dispatchToWaiters(key, bmp)
+
                     holder.iv.post {
                         val posNow = holder.bindingAdapterPosition
                         if (posNow != RecyclerView.NO_POSITION &&
@@ -519,7 +545,7 @@ class ThumbnailAdapter(
                         if (prefetchPaused || Thread.currentThread().isInterrupted) return@Runnable
 
                         val renderer = getOrCreateRenderer(context, info.filePath)
-                        val lock = rendererLocks.computeIfAbsent(info.filePath) { ReentrantLock(true) }!!
+                        val lock = rendererLocks.computeIfAbsent(info.filePath) { ReentrantLock(true) }
 
                         var producedBmp: Bitmap?
                         lock.lock()
@@ -557,6 +583,7 @@ class ThumbnailAdapter(
 
                         producedBmp.let { bmp ->
                             cache.put(key, bmp)
+                            notifyThumbnailCached(key)
                             dispatchToWaiters(key, bmp)
                         }
                     } catch (_: InterruptedException) {

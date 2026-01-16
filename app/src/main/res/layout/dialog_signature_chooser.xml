@@ -1,71 +1,89 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center"
-    android:orientation="vertical"
     tools:ignore="SpUsage, RtlHardcoded">
 
     <com.google.android.material.textview.MaterialTextView
-        android:id="@+id/signature_popup_title"
-        android:text="@string/choose_text"
-        android:layout_width="match_parent"
+        android:id="@+id/sic_popup_title"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:text="@string/choose_text"
         android:textAlignment="center"
         android:textSize="@dimen/dp_18"
         android:textColor="@color/signature_chooser_title_text_color"
         android:layout_marginTop="@dimen/dp_16"
-        android:layout_marginBottom="@dimen/dp_16" />
-
-    <ListView
-        android:id="@+id/listView"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:maxHeight="@dimen/dp_400"
-        android:minHeight="@dimen/dp_200"
-        android:layout_marginLeft="@dimen/dp_10"
-        android:layout_marginRight="@dimen/dp_10"
-        android:divider="@drawable/dialog_list_divider"
-        android:dividerHeight="@dimen/dp_1" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent" />
 
     <LinearLayout
-        android:layout_width="match_parent"
+        android:id="@+id/sic_content_container"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:gravity="center"
-        android:orientation="horizontal">
+        android:orientation="vertical"
+        android:layout_marginTop="@dimen/dp_16"
+        android:layout_marginLeft="@dimen/dp_10"
+        android:layout_marginRight="@dimen/dp_10"
+        app:layout_constrainedHeight="true"
+        app:layout_constraintTop_toBottomOf="@id/sic_popup_title"
+        app:layout_constraintBottom_toTopOf="@id/sic_new"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_new"
-            style="@style/PdfLabelPrinting.TextButton"
-            android:text="@string/new_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_remove"
-            style="@style/PdfLabelPrinting.TextButton"
-            android:text="@string/remove_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_cancel"
-            style="@style/PdfLabelPrinting.TextButton"
-            android:text="@string/cancel_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_ok"
-            style="@style/PdfLabelPrinting.TextButton"
-            android:text="@string/ok_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1" />
+        <ListView
+            android:id="@+id/sic_listview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:divider="@drawable/dialog_list_divider"
+            android:dividerHeight="@dimen/dp_1"
+            tools:listitem="@android:layout/simple_list_item_1" />
     </LinearLayout>
-</LinearLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/sic_new"
+        style="@style/PdfLabelPrinting.TextButton"
+        android:text="@string/new_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toLeftOf="@id/sic_remove"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintHorizontal_chainStyle="spread" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/sic_remove"
+        style="@style/PdfLabelPrinting.TextButton"
+        android:text="@string/remove_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintLeft_toRightOf="@id/sic_new"
+        app:layout_constraintRight_toLeftOf="@id/sic_cancel"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toTopOf="@id/sic_new" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/sic_cancel"
+        style="@style/PdfLabelPrinting.TextButton"
+        android:text="@string/cancel_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintLeft_toRightOf="@id/sic_remove"
+        app:layout_constraintRight_toLeftOf="@id/sic_ok"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toTopOf="@id/sic_new" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/sic_ok"
+        style="@style/PdfLabelPrinting.TextButton"
+        android:text="@string/ok_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintLeft_toRightOf="@id/sic_cancel"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toTopOf="@id/sic_new" />
+</androidx.constraintlayout.widget.ConstraintLayout>

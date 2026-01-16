@@ -7,7 +7,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
-    tools:ignore="SpUsage, RtlHardcoded"
+    tools:ignore="SpUsage, RtlHardcoded, TooManyViews, PrivateResource, HardcodedColor"
     tools:context=".MainActivity">
 
     <com.google.android.material.appbar.AppBarLayout
@@ -33,6 +33,7 @@
             android:layout_height="wrap_content">
 
             <LinearLayout
+                android:id="@+id/top_panel"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:gravity="center"
@@ -42,7 +43,7 @@
                 app:layout_constraintLeft_toLeftOf="parent"
                 app:layout_constraintRight_toRightOf="parent"
                 app:layout_constraintTop_toTopOf="parent"
-                app:layout_constraintWidth_max="@dimen/dp_9999">
+                app:layout_constraintWidth_max="@dimen/dp_9999_main">
 
                 <androidx.constraintlayout.widget.ConstraintLayout
                     android:layout_width="match_parent"
@@ -621,6 +622,7 @@
                         android:id="@+id/rv_thumbnails"
                         android:layout_width="match_parent"
                         android:layout_height="@dimen/dp_420"
+                        android:minHeight="@dimen/dp_420"
                         android:gravity="center"
                         android:nestedScrollingEnabled="true"
                         android:clipToPadding="false"
@@ -634,11 +636,252 @@
     </androidx.core.widget.NestedScrollView>
 
     <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_password"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_password_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_password" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_signature_position"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_signature_position_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_signature_position" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_signature_chooser"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_signature_chooser_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_signature_chooser" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_timestamp"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_timestamp_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_timestamp" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_battery_optimization"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_battery_optimization_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_battery_optimization" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_max_coordinates"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_max_coordinates_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_max_coordinates" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_progress_dialog"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_progress_dialog_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/progress_dialog" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_progress_dialog_update_ui"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_progress_dialog_update_ui_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/progress_dialog_update_ui" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal">
 
         <LinearLayout
+            android:id="@+id/bottom_panel"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:gravity="center"
@@ -650,7 +893,7 @@
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintWidth_max="@dimen/dp_9999">
+            app:layout_constraintWidth_max="@dimen/dp_9999_main">
 
             <androidx.constraintlayout.widget.ConstraintLayout
                 android:layout_width="match_parent"

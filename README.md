@@ -46,8 +46,7 @@ entirely at everyone’s own risk.
 
 - Minimum SDK: 24
 - Target / Compile SDK: 36
-- Kotlin: 2.3.x
-- Android Gradle Plugin: 8.13.x
+- Android Gradle Plugin: 9.0.x
 
 Typical build commands:
 

@@ -9,6 +9,7 @@ import android.view.MotionEvent.ACTION_CANCEL
 import android.view.MotionEvent.ACTION_DOWN
 import android.view.MotionEvent.ACTION_MOVE
 import android.view.MotionEvent.ACTION_UP
+import android.view.View
 import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
@@ -26,9 +27,6 @@ class AlwaysVisibleFastScroller(
     context: Context
 ) : ItemDecoration(), OnItemTouchListener {
 
-    private val density = recyclerView.resources.displayMetrics.density
-    private val verticalMarginPx = (4f * density).toInt()
-    private val rightMarginPx = (7f * density).toInt()
     private val verticalThumbDrawable: StateListDrawable
     private val baseThumbDrawable: Drawable? =
         ContextCompat.getDrawable(context, R.drawable.ic_scroll_button_24)
@@ -38,6 +36,9 @@ class AlwaysVisibleFastScroller(
         ih.toFloat() / iw.toFloat()
     }
 
+    private var density = recyclerView.resources.displayMetrics.density
+    private var verticalMarginPx = (4f * density).toInt()
+    private var rightMarginPx = (7f * density).toInt()
     private var preferredThumbWidthPx = (18f * density).toInt().coerceAtLeast(1)
     private var recyclerViewWidth = 0
     private var recyclerViewHeight = 0
@@ -70,9 +71,19 @@ class AlwaysVisibleFastScroller(
         setupCallbacks()
     }
 
+    private fun forceAllowParentIntercept() {
+        try {
+            recyclerView.parent?.requestDisallowInterceptTouchEvent(false)
+        } catch (_: Exception) {
+        }
+    }
+
     fun setEnabledWhen(hasItems: Boolean) {
         if (hardDisabled) {
             if (enabled) {
+                if (dragging) {
+                    forceAllowParentIntercept()
+                }
                 enabled = false
                 dragging = false
                 recyclerView.invalidate()
@@ -81,6 +92,10 @@ class AlwaysVisibleFastScroller(
         }
 
         if (enabled == hasItems) return
+        if (!hasItems && dragging) {
+            forceAllowParentIntercept()
+        }
+
         enabled = hasItems
         if (!enabled) {
             dragging = false
@@ -91,8 +106,13 @@ class AlwaysVisibleFastScroller(
     fun setTemporarilyDisabled(disabled: Boolean) {
         hardDisabled = disabled
         if (hardDisabled) {
+            if (dragging) {
+                forceAllowParentIntercept()
+            }
             if (enabled) {
                 enabled = false
+                dragging = false
+            } else {
                 dragging = false
             }
             recyclerView.invalidate()
@@ -146,6 +166,35 @@ class AlwaysVisibleFastScroller(
                 recyclerView.post { updateThumbPosition() }
             }
         })
+
+        recyclerView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                if (dragging) {
+                    dragging = false
+                    forceAllowParentIntercept()
+                    recyclerView.invalidate()
+                }
+            }
+        })
+    }
+
+    fun refreshDisplayMetrics() {
+        val newDensity = recyclerView.resources.displayMetrics.density
+        if (newDensity == density) return
+
+        density = newDensity
+        verticalMarginPx = (4f * density).toInt()
+        rightMarginPx = (7f * density).toInt()
+        preferredThumbWidthPx = (18f * density).toInt().coerceAtLeast(1)
+
+        if (!dragging) {
+            updateThumbPosition()
+        } else {
+            recyclerView.invalidate()
+        }
     }
 
     private fun updateThumbPosition() {
@@ -236,7 +285,15 @@ class AlwaysVisibleFastScroller(
     }
 
     override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
-        if (!enabled) return
+        if (!enabled) {
+            if (dragging) {
+                dragging = false
+                forceAllowParentIntercept()
+                rv.invalidate()
+            }
+            return
+        }
+
         when (e.actionMasked) {
             ACTION_MOVE -> {
                 if (!dragging) return

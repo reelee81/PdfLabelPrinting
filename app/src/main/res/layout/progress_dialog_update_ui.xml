@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center"
-    android:orientation="horizontal"
     android:padding="@dimen/dp_16"
     tools:ignore="SpUsage, RtlHardcoded">
 
@@ -15,7 +14,12 @@
         android:layout_height="@dimen/dp_48"
         android:indeterminate="true"
         app:indicatorSize="@dimen/dp_48"
-        app:trackThickness="@dimen/dp_3"/>
+        app:trackThickness="@dimen/dp_3"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toLeftOf="@id/progress_bar_update_ui_simple_text"
+        app:layout_constraintHorizontal_chainStyle="packed" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/progress_bar_update_ui_simple_text"
@@ -23,5 +27,10 @@
         android:layout_height="wrap_content"
         android:textSize="@dimen/dp_14"
         android:textColor="@color/progress_info_text_color"
-        android:layout_marginLeft="@dimen/dp_14" />
-</LinearLayout>
+        android:layout_marginLeft="@dimen/dp_14"
+        app:layout_constrainedHeight="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintLeft_toRightOf="@id/progress_bar_indicator_update_ui"
+        app:layout_constraintRight_toRightOf="parent" />
+</androidx.constraintlayout.widget.ConstraintLayout>

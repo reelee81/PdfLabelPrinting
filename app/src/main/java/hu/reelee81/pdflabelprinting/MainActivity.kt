@@ -39,11 +39,9 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Editable
 import android.text.InputFilter
-import android.text.InputType
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.TextWatcher
-import android.text.method.PasswordTransformationMethod
 import android.text.style.AbsoluteSizeSpan
 import android.util.AttributeSet
 import android.util.Log
@@ -54,12 +52,11 @@ import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
-import android.view.SoundEffectConstants
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.BaseAdapter
@@ -84,10 +81,12 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.AppCompatCheckBox
 import androidx.appcompat.widget.AppCompatImageButton
 import androidx.appcompat.widget.AppCompatImageView
+import androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.graphics.createBitmap
+import androidx.core.view.isVisible
 import androidx.core.view.MenuCompat
 import androidx.core.widget.NestedScrollView
 import androidx.core.widget.TextViewCompat
@@ -97,9 +96,11 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowMetricsCalculator
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.BaseProgressIndicator
 import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.switchmaterial.SwitchMaterial
@@ -127,10 +128,8 @@ import com.itextpdf.kernel.pdf.canvas.parser.data.ImageRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.data.PathRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.data.TextRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.listener.IEventListener
-import org.xmlpull.v1.XmlPullParser
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
 import java.io.ByteArrayOutputStream
-import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -138,9 +137,12 @@ import java.io.IOException
 import java.io.StringReader
 import java.io.StringWriter
 import java.text.SimpleDateFormat
+import java.util.Collections.newSetFromMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.Date
 import java.util.Locale
+import java.util.WeakHashMap
 import java.util.zip.Deflater
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
@@ -149,12 +151,15 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import org.xmlpull.v1.XmlPullParser
 
 class MainActivity : AppCompatActivity() {
 
@@ -208,6 +213,10 @@ class MainActivity : AppCompatActivity() {
         const val KEY_THEME_RESTORE_OFFSET = "key_theme_restore_offset"
         const val KEY_THEME_RESTORE_SELECTED_CSV = "key_theme_restore_selected_csv"
         const val KEY_THEME_RESTORE_NSV_Y = "key_theme_restore_nsv_y"
+        const val KEY_THEME_RESTORE_ROTATION_CSV = "key_theme_restore_rotation_csv"
+        const val KEY_BACKUP_SELECTED = "backup_selected"
+        const val KEY_BACKUP_THUMB_FIRST = "backup_thumb_first"
+        const val KEY_BACKUP_THUMB_OFFSET = "backup_thumb_offset"
         const val KEY_BACKUP_ROWS = "backup_rows"
         const val KEY_BACKUP_COLUMNS = "backup_columns"
         const val KEY_BACKUP_MARGIN = "backup_margin"
@@ -216,7 +225,6 @@ class MainActivity : AppCompatActivity() {
         const val KEY_BACKUP_SCALE = "backup_scale"
         const val KEY_BACKUP_FIT = "backup_fit"
         const val KEY_BACKUP_ROTATION = "backup_rotation"
-        const val KEY_BACKUP_SELECTED = "backup_selected"
         const val DEFAULT_SIG_POS_X_MM = 155
         const val DEFAULT_SIG_POS_Y_MM = 245
 
@@ -277,7 +285,6 @@ class MainActivity : AppCompatActivity() {
     private var lastGlobalAllSelected: Boolean? = null
     private var lastGrantedViewUri: Uri? = null
     private var lastGrantedPkg: String? = null
-    private var orientationLockPrevRequested: Int? = null
     private var selectedDpiIndexForSignature = 0
     private var didRunNScrollColdStartFix = false
     private var isFirstCreate = true
@@ -286,12 +293,38 @@ class MainActivity : AppCompatActivity() {
     private var restoreImeAfterBackground = false
     private var restoreImeAfterBackgroundEditTextId = View.NO_ID
     private var restoreImeAfterBackgroundWasActive = false
+    private var foldableInfoJob: Job? = null
+    private var isTabletLikeDevice: Boolean = false
+    private var suppressRootScrollLayoutCallback: Boolean = false
+    private var lastRootW: Int = -1
+    private var lastRootH: Int = -1
+    private var bottomPanelView: View? = null
+    private var hasWindowFocusFlag: Boolean = true
+    private var pendingRvUpdate: Boolean = false
+    private var suppressNup: Boolean = true
+    private var lastBuiltNupConfig: NupConfig? = null
+    private var isUiBlockedByProgress: Boolean = false
+    private var lastNightMask: Int = -1
+    private var pendingUiModeRecreate: Boolean = false
+    private var signaturePositionEditorDialog: AlertDialog? = null
+    private var signaturePositionEditorRerender: (() -> Unit)? = null
+    private var savedSoftInputModeForOverlay: Int? = null
+    private var pendingCacheCleanupAfterExternalReturn = false
+    private var didPauseForExternalAction = false
+    private var orientationLockPrevRequested: Int? = null
 
     @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
     @Volatile private var clearSelectionOnNextRebuild = false
+    @Volatile private var isFoldableDevice: Boolean = false
+    @Volatile private var deferOrientationUnlockUntilThumbnailsReady: Boolean = false
+    @Volatile private var deferredOrientationUnlockRequested: Boolean = false
+    @Volatile private var reloadThumbnailsGeneration: Long = 0L
 
-    private var suppressNup: Boolean = true
+    private val prefsBackupLock = Any()
+    private val rvHeightUpdateRunnable = Runnable {
+        applyRvThumbnailsHeight()
+    }
 
     private data class NupConfig(
         val rows: Int,
@@ -303,20 +336,8 @@ class MainActivity : AppCompatActivity() {
         val fitIndividually: Boolean
     )
 
-    private data class InitialStateSnapBackup(
-        val rows: String,
-        val columns: String,
-        val marginVal: String,
-        val isPortrait: Boolean,
-        val drawFrame: Boolean,
-        val scale: Boolean,
-        val fit: Boolean,
-        val rotation: String
-    )
-
-    private var lastBuiltNupConfig: NupConfig? = null
-
     private val activeJobs = CopyOnWriteArrayList<Job>()
+    private val plpSizedDialogs: MutableSet<AlertDialog> = newSetFromMap(WeakHashMap())
 
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && result.data?.data != null) {
@@ -359,7 +380,9 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, getString(R.string.msg_prefs_loaded_success), Toast.LENGTH_LONG).show()
 
                         val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                        val profile = sp.getString(KEY_LAST_LOADED_PROFILE, "") ?: ""
+                        val profile = synchronized(prefsBackupLock) {
+                            sp.getString(KEY_LAST_LOADED_PROFILE, "") ?: ""
+                        }
 
                         when (profile) {
                             "normal" -> {
@@ -395,7 +418,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-        val theme = prefs.getString(KEY_THEME_MODE, "system") ?: "system"
+        val theme = synchronized(prefsBackupLock) {
+            prefs.getString(KEY_THEME_MODE, "system") ?: "system"
+        }
 
         if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
             val uiModeManager = getSystemService(UI_MODE_SERVICE) as UiModeManager
@@ -447,6 +472,31 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        lastNightMask = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+
+        val maxMetrics = WindowMetricsCalculator.getOrCreate().computeMaximumWindowMetrics(this)
+        val density = resources.displayMetrics.density
+        val wDp = maxMetrics.bounds.width() / density
+        val hDp = maxMetrics.bounds.height() / density
+        val maxSmallestDp = min(wDp, hDp)
+
+        isTabletLikeDevice = (maxSmallestDp >= 600f)
+
+        binding.rootScroll.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+            if (suppressRootScrollLayoutCallback) return@addOnLayoutChangeListener
+
+            val w = right - left
+            val h = bottom - top
+            if (w == lastRootW && h == lastRootH) return@addOnLayoutChangeListener
+            lastRootW = w
+            lastRootH = h
+
+            requestRvThumbnailsHeightUpdate()
+        }
+
+        requestRvThumbnailsHeightUpdate()
+
+
         run {
             val navColor = ContextCompat.getColor(this, R.color.app_background_color)
             SystemBarsCompat.applyNavBarColor(this, navColor)
@@ -477,6 +527,8 @@ class MainActivity : AppCompatActivity() {
         portrait = findViewById(R.id.portrait)
         landscape = findViewById(R.id.landscape)
         drawFrameSwitch = findViewById(R.id.drawframe)
+
+        bottomPanelView = findViewById(R.id.bottom_panel)
 
         listStartButton = findViewById(R.id.list_start)
         listEndButton = findViewById(R.id.list_end)
@@ -509,26 +561,30 @@ class MainActivity : AppCompatActivity() {
             updateSignatureInputFilters()
             if (checked) maybeRegeneratePlpOnSettingChange()
         }
+
         landscape.setOnCheckedChangeListener { _, checked ->
             updateSignatureInputFilters()
             if (checked) maybeRegeneratePlpOnSettingChange()
         }
 
-        drawFrameSwitch.setOnCheckedChangeListener { _, _ -> maybeRegeneratePlpOnSettingChange() }
+        drawFrameSwitch.setOnCheckedChangeListener { _, _ ->
+            maybeRegeneratePlpOnSettingChange()
+        }
+
         scaleSwitch.setOnCheckedChangeListener { _, isChecked ->
             fitSwitch.isEnabled = isChecked
             maybeRegeneratePlpOnSettingChange()
         }
-        fitSwitch.setOnCheckedChangeListener { _, _ -> maybeRegeneratePlpOnSettingChange() }
+
+        fitSwitch.setOnCheckedChangeListener { _, _ ->
+            maybeRegeneratePlpOnSettingChange()
+        }
 
         setupRegenerateOnBlur(numberOfRows)
         setupRegenerateOnBlur(numberOfColumns)
         setupRegenerateOnBlur(margin)
 
-        progressDialog = MaterialAlertDialogBuilder(this)
-            .setMessage(getString(R.string.in_progress_my))
-            .setCancelable(false)
-            .create()
+        progressDialog = AlertDialog.Builder(this).create()
 
         viewModel = ViewModelProvider(this)[PageItemsViewModel::class.java]
         val pageItems = viewModel.pageItems
@@ -600,11 +656,14 @@ class MainActivity : AppCompatActivity() {
                                 ).show()
                             }
                         } finally {
+                            runCatching { cleanupCacheExceptTemps() }
+
                             withContext(Dispatchers.Main) {
                                 hideInProgressIfShown()
                                 unlockScreenOrientation()
                                 pendingSaveNamedPath = null
                                 pendingSaveNamedDisplayName = null
+                                maybeRunDeferredUiModeRecreate()
                             }
                         }
                     }
@@ -613,10 +672,14 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     pendingSaveNamedPath = null
                     pendingSaveNamedDisplayName = null
+                    lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
+                    maybeRunDeferredUiModeRecreate()
                 }
             } else {
                 pendingSaveNamedPath = null
                 pendingSaveNamedDisplayName = null
+                lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
+                maybeRunDeferredUiModeRecreate()
             }
         }
 
@@ -810,34 +873,69 @@ class MainActivity : AppCompatActivity() {
         handleIncomingShareIntent(intent)
         setIntent(Intent())
 
+        val bundleIndicesToSelect: Set<Int>? = savedInstanceState
+            ?.getIntegerArrayList("state_selected_idx")
+            ?.toSet()
+            ?.takeIf { it.isNotEmpty() }
+
+        savedInstanceState
+            ?.getIntArray("state_source_rotation")
+            ?.let { sourceRotation = it }
+
         runCatching {
             val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            val restFirst = sp.getInt(KEY_THEME_RESTORE_FIRST, RecyclerView.NO_POSITION)
-            val restOffset = sp.getInt(KEY_THEME_RESTORE_OFFSET, 0)
-            val csv = sp.getString(KEY_THEME_RESTORE_SELECTED_CSV, "") ?: ""
-            val nsvY = sp.getInt(KEY_THEME_RESTORE_NSV_Y, -1)
-            val indicesToSelect: Set<Int>? = csv.split(',')
+
+            val restFirst: Int
+            val restOffset: Int
+            val csv: String
+            val nsvY: Int
+            val needLockAtStart: Boolean
+
+            synchronized(prefsBackupLock) {
+                restFirst = sp.getInt(KEY_THEME_RESTORE_FIRST, RecyclerView.NO_POSITION)
+                restOffset = sp.getInt(KEY_THEME_RESTORE_OFFSET, 0)
+                csv = sp.getString(KEY_THEME_RESTORE_SELECTED_CSV, "") ?: ""
+                nsvY = sp.getInt(KEY_THEME_RESTORE_NSV_Y, -1)
+                needLockAtStart = sp.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+            }
+
+            val hasRotationRestore = sp.contains(KEY_THEME_RESTORE_ROTATION_CSV)
+            val rotationCsv = sp.getString(KEY_THEME_RESTORE_ROTATION_CSV, "") ?: ""
+            val restoredRotation: IntArray? = if (hasRotationRestore) {
+                if (rotationCsv.isNotEmpty()) {
+                    rotationCsv.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+                } else {
+                    IntArray(0)
+                }
+            } else null
+
+            restoredRotation?.let { sourceRotation = it }
+
+            val indicesToSelectPrefs: Set<Int>? = csv.split(',')
                 .mapNotNull { it.toIntOrNull() }
                 .toSet()
                 .takeIf { it.isNotEmpty() }
 
-            if (restFirst != RecyclerView.NO_POSITION || indicesToSelect != null) {
-                sp.edit {
-                    remove(KEY_THEME_RESTORE_FIRST)
-                    remove(KEY_THEME_RESTORE_OFFSET)
-                    remove(KEY_THEME_RESTORE_SELECTED_CSV)
-                    remove(KEY_THEME_RESTORE_NSV_Y)
+            val indicesToSelect: Set<Int>? = indicesToSelectPrefs ?: bundleIndicesToSelect
+
+            if (restFirst != RecyclerView.NO_POSITION || indicesToSelect != null || hasRotationRestore || nsvY >= 0) {
+                synchronized(prefsBackupLock) {
+                    sp.edit {
+                        remove(KEY_THEME_RESTORE_FIRST)
+                        remove(KEY_THEME_RESTORE_OFFSET)
+                        remove(KEY_THEME_RESTORE_SELECTED_CSV)
+                        remove(KEY_THEME_RESTORE_ROTATION_CSV)
+                        remove(KEY_THEME_RESTORE_NSV_Y)
+                    }
                 }
 
-                val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
-                if (needLock) {
+                if (needLockAtStart) {
                     showInProgressUpdateUI(getString(R.string.in_progress_ui))
                     lockScreenOrientation()
                 }
 
                 reloadThumbnailsFromPlp(
-                    targetIndex = restFirst,
+                    targetIndex = restFirst.takeIf { it != RecyclerView.NO_POSITION },
                     targetOffsetPx = restOffset,
                     restorePrevious = false,
                     indicesToSelect = indicesToSelect,
@@ -845,7 +943,10 @@ class MainActivity : AppCompatActivity() {
                     onStarted = {
                         hideInProgressIfShownUpdateUI()
                         unlockScreenOrientation()
-                        spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                        synchronized(prefsBackupLock) {
+                            val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                            spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                        }
                     }
                 )
 
@@ -854,9 +955,7 @@ class MainActivity : AppCompatActivity() {
                     nsv?.post { nsv.scrollTo(0, nsvY) }
                 }
             } else {
-                val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
-                if (needLock) {
+                if (needLockAtStart) {
                     showInProgressUpdateUI(getString(R.string.in_progress_ui))
                     lockScreenOrientation()
                 }
@@ -865,13 +964,18 @@ class MainActivity : AppCompatActivity() {
                     onStarted = {
                         hideInProgressIfShownUpdateUI()
                         unlockScreenOrientation()
-                        spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                        synchronized(prefsBackupLock) {
+                            val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                            spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                        }
                     }
                 )
             }
         }.onFailure {
             val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            val needLock = spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+            val needLock = synchronized(prefsBackupLock) {
+                spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+            }
             if (needLock) {
                 showInProgressUpdateUI(getString(R.string.in_progress_ui))
                 lockScreenOrientation()
@@ -881,27 +985,54 @@ class MainActivity : AppCompatActivity() {
                 onStarted = {
                     hideInProgressIfShownUpdateUI()
                     unlockScreenOrientation()
-                    spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
-                }
-            )
-        }
-
-        savedInstanceState?.getIntegerArrayList("state_selected_idx")?.let { restoredIdx ->
-            if (restoredIdx.isNotEmpty()) {
-                val max = viewModel.pageItems.size
-                restoredIdx.forEach { i ->
-                    if (i in 0 until max) {
-                        viewModel.pageItems[i].isSelected = true
-                        adapter.notifyItemChanged(i)
+                    synchronized(prefsBackupLock) {
+                        spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                     }
                 }
-            }
+            )
         }
 
         updateButtonsState()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+
+                if (::binding.isInitialized) {
+                    if (binding.overlayProgressDialog.isVisible || binding.overlayProgressDialogUpdateUi.isVisible) {
+                        return
+                    }
+
+                    if (binding.overlayDialogSignaturePosition.isVisible) {
+                        binding.overlayDialogSignaturePosition.performClick()
+                        return
+                    }
+
+                    if (binding.overlayDialogSignatureChooser.isVisible) {
+                        binding.overlayDialogSignatureChooser.performClick()
+                        return
+                    }
+
+                    if (binding.overlayDialogPassword.isVisible) {
+                        binding.overlayDialogPassword.performClick()
+                        return
+                    }
+
+                    if (binding.overlayDialogTimestamp.isVisible) {
+                        binding.overlayDialogTimestamp.performClick()
+                        return
+                    }
+
+                    if (binding.overlayDialogBatteryOptimization.isVisible) {
+                        binding.overlayDialogBatteryOptimization.performClick()
+                        return
+                    }
+
+                    if (binding.overlayDialogMaxCoordinates.isVisible) {
+                        binding.overlayDialogMaxCoordinates.performClick()
+                        return
+                    }
+                }
+
                 finishAndRemoveTask()
             }
         })
@@ -943,6 +1074,132 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun scheduleUiModeRecreate() {
+        if (isFinishing || isDestroyed) return
+
+        window.decorView.post {
+            if (isFinishing || isDestroyed) return@post
+            recreate()
+        }
+    }
+
+    private fun maybeRunDeferredUiModeRecreate() {
+        if (!pendingUiModeRecreate) return
+        if (isUiBlockedByProgress) return
+        if (orientationLockPrevRequested != null) return
+        if (pendingSaveNamedPath != null) return
+
+        pendingUiModeRecreate = false
+        scheduleUiModeRecreate()
+    }
+
+    private fun recomputeTabletLikeFlag() {
+        val maxMetrics = WindowMetricsCalculator.getOrCreate().computeMaximumWindowMetrics(this)
+        val density = resources.displayMetrics.density
+        val wDp = maxMetrics.bounds.width() / density
+        val hDp = maxMetrics.bounds.height() / density
+        val maxSmallestDp = min(wDp, hDp)
+        isTabletLikeDevice = (maxSmallestDp >= 600f)
+    }
+
+    private fun reapplyPanelsMaxWidthFromResources() {
+        val maxPxMain = resources.getDimensionPixelSize(R.dimen.dp_9999_main)
+        val maxPxOverlay = resources.getDimensionPixelSize(R.dimen.dp_9999_overlay)
+
+        listOf(binding.topPanel, binding.bottomPanel)
+            .forEach { updateMatchConstraintMaxWidth(it, maxPxMain) }
+
+        listOf(
+            binding.overlayDialogPasswordPanel,
+            binding.overlayDialogSignaturePositionPanel,
+            binding.overlayDialogSignatureChooserPanel,
+            binding.overlayDialogTimestampPanel,
+            binding.overlayDialogBatteryOptimizationPanel,
+            binding.overlayDialogMaxCoordinatesPanel,
+            binding.overlayProgressDialogPanel,
+            binding.overlayProgressDialogUpdateUiPanel
+        ).forEach { updateMatchConstraintMaxWidth(it, maxPxOverlay) }
+    }
+
+    private fun updateMatchConstraintMaxWidth(view: View, maxWidthPx: Int) {
+        val lp = view.layoutParams as? LayoutParams
+            ?: return
+
+        if (lp.matchConstraintMaxWidth != maxWidthPx) {
+            lp.matchConstraintMaxWidth = maxWidthPx
+            view.layoutParams = lp
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+
+        recomputeTabletLikeFlag()
+
+        reapplyPanelsMaxWidthFromResources()
+
+        fastScroller?.refreshDisplayMetrics()
+
+        requestRvThumbnailsHeightUpdate()
+
+        val prevNightMask = lastNightMask
+        val nightMask = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+
+        if (nightMask == Configuration.UI_MODE_NIGHT_UNDEFINED) {
+            val rerender = signaturePositionEditorRerender
+
+            if (::binding.isInitialized && binding.overlayDialogSignaturePosition.isVisible && rerender != null) {
+                binding.root.post {
+                    rerender.invoke()
+                }
+            }
+            return
+        }
+
+        if (prevNightMask < 0) {
+            lastNightMask = nightMask
+            return
+        }
+
+        if (prevNightMask == Configuration.UI_MODE_NIGHT_UNDEFINED) {
+            lastNightMask = nightMask
+            return
+        }
+
+        val uiModeChanged = (nightMask != prevNightMask)
+        if (uiModeChanged) {
+            lastNightMask = nightMask
+
+            window.decorView.post {
+                if (isFinishing || isDestroyed) return@post
+
+                val stableMask = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+                if (stableMask == Configuration.UI_MODE_NIGHT_UNDEFINED) {
+                    return@post
+                }
+
+                if (stableMask != nightMask) {
+                    lastNightMask = stableMask
+                    return@post
+                }
+
+                if (isUiBlockedByProgress || orientationLockPrevRequested != null) {
+                    pendingUiModeRecreate = true
+                } else {
+                    scheduleUiModeRecreate()
+                }
+            }
+        } else {
+            val rerender = signaturePositionEditorRerender
+
+            if (::binding.isInitialized && binding.overlayDialogSignaturePosition.isVisible && rerender != null) {
+                binding.root.post {
+                    rerender.invoke()
+                }
+            }
+        }
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         val selectedIdx = viewModel.pageItems
@@ -963,14 +1220,18 @@ class MainActivity : AppCompatActivity() {
                 val nsvY = nsv?.scrollY ?: -1
 
                 val csv = selectedIdx.joinToString(",")
+                val rotationCsv = sourceRotation.joinToString(",")
 
                 val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                sp.edit {
-                    putInt(KEY_THEME_RESTORE_FIRST, first)
-                    putInt(KEY_THEME_RESTORE_OFFSET, offset)
-                    putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
-                    putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
-                    putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
+                synchronized(prefsBackupLock) {
+                    sp.edit {
+                        putInt(KEY_THEME_RESTORE_FIRST, first)
+                        putInt(KEY_THEME_RESTORE_OFFSET, offset)
+                        putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
+                        putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
+                        putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
+                        putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
+                    }
                 }
             }.onFailure {
             }
@@ -978,21 +1239,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun lockScreenOrientation() {
+        if (::binding.isInitialized && binding.overlayDialogPassword.isVisible) return
         if (orientationLockPrevRequested != null) return
 
         orientationLockPrevRequested = requestedOrientation
-
-        val lockTo = when (resources.configuration.orientation) {
-            Configuration.ORIENTATION_LANDSCAPE ->
-                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            Configuration.ORIENTATION_PORTRAIT  ->
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            else -> ActivityInfo.SCREEN_ORIENTATION_LOCKED
-        }
-        requestedOrientation = lockTo
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
     }
 
     private fun unlockScreenOrientation() {
+
+        if (deferOrientationUnlockUntilThumbnailsReady) {
+            deferredOrientationUnlockRequested = true
+            return
+        }
+
         val prev = orientationLockPrevRequested ?: return
         orientationLockPrevRequested = null
         requestedOrientation = prev
@@ -1014,8 +1274,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIncomingShareIntent(intent: Intent) {
-        if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            return}
+        if (::binding.isInitialized && (
+                    binding.overlayProgressDialog.isVisible ||
+                            binding.overlayProgressDialogUpdateUi.isVisible
+                    )
+        ) {
+            return
+        }
 
         val action = intent.action
 
@@ -1057,9 +1322,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 activeJobs.add(backupJob)
                 backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-                showInProgress(getString(R.string.in_progress_opening))
-                lockScreenOrientation()
 
                 if (uris.size == 1) {
                     handlePdfUri(uris.first())
@@ -1153,9 +1415,6 @@ class MainActivity : AppCompatActivity() {
     private fun handlePdfUrisBatch(uris: List<Uri>) {
         if (uris.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_opening))
-        lockScreenOrientation()
-
         val backupJob = lifecycleScope.launch {
             backupSelectionState()
         }
@@ -1190,6 +1449,8 @@ class MainActivity : AppCompatActivity() {
                     return msg.contains("bad user password") || msg.contains("bad password")
                 }
 
+                var progressStarted = false
+
                 for (uri in uris) {
                     val tempSrc = File(cacheDir, "${timeStamp}_${extractFileName(uri)}")
                     try {
@@ -1207,32 +1468,53 @@ class MainActivity : AppCompatActivity() {
                         var attempt = 0
 
                         while (true) {
-                            try {
-                                appendPdfToSourceTemp(tempSrc, passwordBytes)
-                                break
+                            val canOpen = try {
+                                PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { }
+                                true
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
                                 if (!isBadPassword(e)) throw e
+                                false
+                            }
 
+                            if (canOpen) break
+
+                            if (progressStarted) {
                                 withContext(Dispatchers.Main) {
                                     hideInProgressIfShown()
+                                    unlockScreenOrientation()
                                 }
-                                val entered: String? = withContext(Dispatchers.Main) {
-                                    promptForPdfPassword(showError = (attempt > 0))
-                                }
-                                if (entered.isNullOrEmpty()) {
-                                    withContext(Dispatchers.Main) {
-                                    }
-                                    tempSrc.delete()
-                                    return@launch
-                                } else {
-                                    passwordBytes = entered.toByteArray(Charsets.UTF_8)
-                                    attempt++
-                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_opening)) }
-                                }
+                                progressStarted = false
                             }
+
+                            val entered: String? = withContext(Dispatchers.Main) {
+                                promptForPdfPassword(showError = (attempt > 0))
+                            }
+
+                            if (entered.isNullOrEmpty()) {
+                                withContext(Dispatchers.Main) {
+                                    hideInProgressIfShown()
+                                    unlockScreenOrientation()
+                                }
+                                tempSrc.delete()
+                                return@launch
+                            }
+
+                            passwordBytes = entered.toByteArray(Charsets.UTF_8)
+                            attempt++
                         }
+
+                        if (!progressStarted) {
+                            withContext(Dispatchers.Main) {
+                                showInProgress(getString(R.string.in_progress_opening))
+                                lockScreenOrientation()
+                            }
+                            progressStarted = true
+                        }
+
+                        appendPdfToSourceTemp(tempSrc, passwordBytes)
+
                     } finally {
                         runCatching { tempSrc.delete() }
                     }
@@ -1284,6 +1566,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (::binding.isInitialized && binding.overlayDialogPassword.isVisible) {
+            return super.dispatchTouchEvent(ev)
+        }
+
         if (ev.action == MotionEvent.ACTION_DOWN) {
             val view = currentFocus
             if (view is EditText) {
@@ -1499,77 +1785,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMaxCoordinatesAlert(maxXi: Int, maxYi: Int) {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
+        val overlay = binding.overlayDialogMaxCoordinates
+        val panel = binding.overlayDialogMaxCoordinatesPanel
 
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .create()
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_max_coordinates, panel, false)
+        panel.addView(dialogView)
 
-        dialogView.findViewById<View>(R.id.signature_popup_title)?.visibility = View.GONE
+        overlay.visibility = View.VISIBLE
 
-        val listView = dialogView.findViewById<ListView>(R.id.listView)
-        val parent = listView.parent as ViewGroup
-        val indexInParent = parent.indexOfChild(listView)
-        val lp = listView.layoutParams
-        val padStart = listView.paddingLeft
-        val padTop = listView.paddingTop
-        val padEnd = listView.paddingRight
-        val padBottom = listView.paddingBottom
-        parent.removeView(listView)
-
-        val messageView = MaterialTextView(dialogView.context).apply {
-            layoutParams = lp
-            text = getString(R.string.max_coordinates_x_y_mm, maxXi, maxYi)
-
-            textAlignment = View.TEXT_ALIGNMENT_CENTER
-            gravity = Gravity.CENTER
-
-            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_PdfLabelPrinting_ListItem)
-            setPadding(padStart, padTop, padEnd, padBottom)
+        overlay.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
+        panel.setOnClickListener {
         }
 
-        runCatching {
-            val extraTop = resources.getDimensionPixelSize(R.dimen.dp_20)
-            when (val orig = messageView.layoutParams) {
-                is LinearLayout.LayoutParams -> {
-                    val n = LinearLayout.LayoutParams(orig)
-                    n.topMargin = orig.topMargin + extraTop
-                    messageView.layoutParams = n
-                }
-                is ViewGroup.MarginLayoutParams -> {
-                    val n = ViewGroup.MarginLayoutParams(orig)
-                    n.topMargin = orig.topMargin + extraTop
-                    messageView.layoutParams = n
-                }
-                else -> {
-                    val n = ViewGroup.MarginLayoutParams(orig)
-                    n.topMargin = extraTop
-                    messageView.layoutParams = n
-                }
-            }
+        dialogView.findViewById<MaterialTextView>(R.id.dmc_text)?.text =
+            getString(R.string.max_coordinates_x_y_mm, maxXi, maxYi)
+
+        val btnOk = dialogView.findViewById<Button>(R.id.dmc_btn_ok)
+
+        btnOk?.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
         }
-
-        parent.addView(messageView, indexInParent)
-
-        val btnNew = dialogView.findViewById<Button>(R.id.btn_new)
-        val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-        val btnOk = dialogView.findViewById<Button>(R.id.btn_ok)
-        val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-
-        btnNew?.visibility = View.GONE
-        btnRemove?.visibility = View.GONE
-        btnCancel?.visibility = View.GONE
-
-        (btnOk?.layoutParams as? LinearLayout.LayoutParams)?.let { lpOk ->
-            lpOk.width = ViewGroup.LayoutParams.WRAP_CONTENT
-            lpOk.weight = 0f
-            lpOk.gravity = Gravity.CENTER_HORIZONTAL
-            btnOk.layoutParams = lpOk
-        }
-        btnOk?.setOnClickListener { dialog.dismiss() }
-
-        dialog.setCanceledOnTouchOutside(true)
-        dialog.show()
     }
 
     private fun refPxForSignatureDpi(idx: Int): Float {
@@ -1582,6 +1822,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun currentSignatureRefPx(): Float = refPxForSignatureDpi(selectedDpiIndexForSignature)
 
+    @SuppressLint("RtlHardcoded")
     private fun showSignatureDialog() {
         if (viewModel.pageItems.none { it.isSelected }) {
             Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
@@ -1604,17 +1845,34 @@ class MainActivity : AppCompatActivity() {
             selectedSigIndex = -1
 
             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            val lastDpiSaved = prefs.getInt(KEY_LAST_SIG_DPI_INDEX, 0).coerceIn(0, 1)
+            val lastDpiSaved = synchronized(prefsBackupLock) {
+                prefs.getInt(KEY_LAST_SIG_DPI_INDEX, 0).coerceIn(0, 1)
+            }
             selectedDpiIndexForSignature = lastDpiSaved
 
-            val dialogView = LayoutInflater.from(this@MainActivity).inflate(R.layout.dialog_signature_chooser, null)
-            val builder = MaterialAlertDialogBuilder(this@MainActivity).setView(dialogView)
-            val dialog = builder.create()
+            val overlay = binding.overlayDialogSignatureChooser
+            val panel = binding.overlayDialogSignatureChooserPanel
+            panel.removeAllViews()
+            val dialogView = LayoutInflater.from(this@MainActivity).inflate(R.layout.dialog_signature_chooser, panel, false)
+            panel.addView(dialogView)
+            overlay.visibility = View.VISIBLE
+            overlay.bringToFront()
 
-            val listView = dialogView.findViewById<ListView>(R.id.listView)
+            overlay.setOnClickListener {
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+            }
+            panel.setOnClickListener {
+            }
 
-            var applyScanEffect = prefs.getBoolean(KEY_LAST_SCAN_EFFECT, false)
-            var applyGrayscalePage = prefs.getBoolean(KEY_LAST_GRAYSCALE, false)
+            val listView = dialogView.findViewById<ListView>(R.id.sic_listview)
+
+            var applyScanEffect = synchronized(prefsBackupLock) {
+                prefs.getBoolean(KEY_LAST_SCAN_EFFECT, false)
+            }
+            var applyGrayscalePage = synchronized(prefsBackupLock) {
+                prefs.getBoolean(KEY_LAST_GRAYSCALE, false)
+            }
 
             var overrideXmm: Float? = null
             var overrideYmm: Float? = null
@@ -1646,7 +1904,6 @@ class MainActivity : AppCompatActivity() {
 
                     override fun getItemId(position: Int): Long = position.toLong()
 
-                    @SuppressLint("RtlHardcoded")
                     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                         val isDpiRow = (position == 0 || position == 1)
                         val isScanRow = (position == 2)
@@ -1939,22 +2196,28 @@ class MainActivity : AppCompatActivity() {
                             if (isDpiRow) {
                                 dpiSelectedIndex = position
                                 selectedDpiIndexForSignature = position
-                                prefs.edit {
-                                    putInt(KEY_LAST_SIG_DPI_INDEX, position)
+                                synchronized(prefsBackupLock) {
+                                    prefs.edit {
+                                        putInt(KEY_LAST_SIG_DPI_INDEX, position)
+                                    }
                                 }
                                 (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                             } else if (isScanRow) {
                                 applyScanEffect = !applyScanEffect
                                 (row.tag as RowViews).scanCheck?.isChecked = applyScanEffect
-                                prefs.edit {
-                                    putBoolean(KEY_LAST_SCAN_EFFECT, applyScanEffect)
+                                synchronized(prefsBackupLock) {
+                                    prefs.edit {
+                                        putBoolean(KEY_LAST_SCAN_EFFECT, applyScanEffect)
+                                    }
                                 }
                                 (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                             } else if (isGrayRow) {
                                 applyGrayscalePage = !applyGrayscalePage
                                 (row.tag as RowViews).scanCheck?.isChecked = applyGrayscalePage
-                                prefs.edit {
-                                    putBoolean(KEY_LAST_GRAYSCALE, applyGrayscalePage)
+                                synchronized(prefsBackupLock) {
+                                    prefs.edit {
+                                        putBoolean(KEY_LAST_GRAYSCALE, applyGrayscalePage)
+                                    }
                                 }
                                 (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                             } else {
@@ -1972,10 +2235,10 @@ class MainActivity : AppCompatActivity() {
                 listView.choiceMode = ListView.CHOICE_MODE_SINGLE
             }
 
-            val btnNew = dialogView.findViewById<Button>(R.id.btn_new)
-            val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-            val btnOk = dialogView.findViewById<Button>(R.id.btn_ok)
-            val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
+            val btnNew = dialogView.findViewById<Button>(R.id.sic_new)
+            val btnRemove = dialogView.findViewById<Button>(R.id.sic_remove)
+            val btnOk = dialogView.findViewById<Button>(R.id.sic_ok)
+            val btnCancel = dialogView.findViewById<Button>(R.id.sic_cancel)
 
             btnNew.setOnClickListener {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -1983,7 +2246,9 @@ class MainActivity : AppCompatActivity() {
                     type = "image/png"
                 }
                 signaturePickerLauncher.launch(intent)
-                dialog.dismiss()
+
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
             }
 
             btnRemove.isEnabled = false
@@ -1995,8 +2260,10 @@ class MainActivity : AppCompatActivity() {
                         val deleted = fileToDelete.delete()
                         withContext(Dispatchers.Main) {
                             if (deleted) {
+                                overlay.visibility = View.GONE
+                                overlay.setOnClickListener(null)
+
                                 showSignatureDialog()
-                                dialog.dismiss()
                             } else {
                                 Toast.makeText(this@MainActivity, getString(R.string.failed_to_delete_signature), Toast.LENGTH_SHORT).show()
                             }
@@ -2055,7 +2322,10 @@ class MainActivity : AppCompatActivity() {
 
                         signaturePosX.filters = arrayOf(InputFilter.LengthFilter(3))
                         signaturePosY.filters = arrayOf(InputFilter.LengthFilter(3))
-                        dialog.dismiss()
+
+                        overlay.visibility = View.GONE
+                        overlay.setOnClickListener(null)
+
                         window?.decorView?.post {
                             showMaxCoordinatesAlert(maxXi, maxYi)
                         }
@@ -2070,7 +2340,8 @@ class MainActivity : AppCompatActivity() {
                         applyGrayscalePage = applyGrayscalePage
                     )
 
-                    dialog.dismiss()
+                    overlay.visibility = View.GONE
+                    overlay.setOnClickListener(null)
                 }
             }
 
@@ -2104,10 +2375,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             btnCancel.setOnClickListener {
-                dialog.dismiss()
-            }
 
-            dialog.show()
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+            }
         }
     }
 
@@ -2130,6 +2401,17 @@ class MainActivity : AppCompatActivity() {
         private var downYRelToParent = 0f
 
         private val clickSlop = ViewConfiguration.get(context).scaledTouchSlop
+
+        private var disallowingParentIntercept = false
+
+        private fun forceAllowParentIntercept() {
+            if (!disallowingParentIntercept) return
+            disallowingParentIntercept = false
+            try {
+                parent?.requestDisallowInterceptTouchEvent(false)
+            } catch (_: Exception) {
+            }
+        }
 
         fun updatePosition(left: Int, top: Int) {
             layoutParams = (layoutParams as FrameLayout.LayoutParams).apply {
@@ -2157,6 +2439,7 @@ class MainActivity : AppCompatActivity() {
                     downXRelToParent = ev.rawX - parentX
                     downYRelToParent = ev.rawY - parentY
 
+                    disallowingParentIntercept = true
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -2172,7 +2455,7 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    parent?.requestDisallowInterceptTouchEvent(false)
+                    forceAllowParentIntercept()
 
                     val (parentX, parentY) = parentLocationOnScreen()
                     val dx = abs((ev.rawX - parentX) - downXRelToParent)
@@ -2183,11 +2466,23 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    parent?.requestDisallowInterceptTouchEvent(false)
+                    forceAllowParentIntercept()
                     return true
                 }
             }
             return super.onTouchEvent(ev)
+        }
+
+        override fun onDetachedFromWindow() {
+            forceAllowParentIntercept()
+            super.onDetachedFromWindow()
+        }
+
+        override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+            if (!hasWindowFocus) {
+                forceAllowParentIntercept()
+            }
+            super.onWindowFocusChanged(hasWindowFocus)
         }
 
         override fun performClick(): Boolean {
@@ -2204,10 +2499,19 @@ class MainActivity : AppCompatActivity() {
     ) {
         val ctx = this
 
-        val dialogView = LayoutInflater.from(ctx).inflate(R.layout.dialog_signature_position, null)
-        val dialog = MaterialAlertDialogBuilder(ctx, R.style.SignaturePosition_PdfLabelPrinting_AlertDialog)
-            .setView(dialogView)
-            .create()
+        val overlay = binding.overlayDialogSignaturePosition
+        val panel = binding.overlayDialogSignaturePositionPanel
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(ctx).inflate(R.layout.dialog_signature_position, panel, false)
+        panel.addView(dialogView)
+        overlay.visibility = View.VISIBLE
+        overlay.bringToFront()
+
+        panel.setOnClickListener {
+        }
+
+        signaturePositionEditorDialog = null
+        signaturePositionEditorRerender = null
 
         val btnCancel = dialogView.findViewById<MaterialButton>(R.id.sp_btn_cancel)
         val btnOk = dialogView.findViewById<MaterialButton>(R.id.sp_btn_ok)
@@ -2283,9 +2587,51 @@ class MainActivity : AppCompatActivity() {
         var allowedMaxXmm = 0f
         var allowedMaxYmm = 0f
 
+        var lastPageBitmap: Bitmap? = null
+        var lastSigBitmap: Bitmap? = null
+        var lastRenderedAvailW = -1
+
+        var layoutRerenderRunnable: Runnable? = null
+        var layoutListener: View.OnLayoutChangeListener? = null
+
+        val finished = AtomicBoolean(false)
+
+        fun dismissWithResult(xmm: Float?, ymm: Float?) {
+            if (!finished.compareAndSet(false, true)) return
+
+            signaturePositionEditorDialog = null
+            signaturePositionEditorRerender = null
+
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+
+            layoutListener?.let { ll ->
+                stage.removeOnLayoutChangeListener(ll)
+                scroller.removeOnLayoutChangeListener(ll)
+                dialogView.removeOnLayoutChangeListener(ll)
+            }
+
+            layoutRerenderRunnable?.let { rr ->
+                stage.removeCallbacks(rr)
+            }
+
+            runCatching {
+                pageView.setImageDrawable(null)
+                lastPageBitmap?.let { if (!it.isRecycled) it.recycle() }
+                lastPageBitmap = null
+            }
+
+            runCatching {
+                sigView.setImageDrawable(null)
+                lastSigBitmap?.let { if (!it.isRecycled) it.recycle() }
+                lastSigBitmap = null
+            }
+
+            onResult(xmm, ymm)
+        }
+
         btnCancel.setOnClickListener {
-            dialog.dismiss()
-            onResult(null, null)
+            dismissWithResult(null, null)
         }
         btnOk.setOnClickListener {
             if (!okReady) {
@@ -2300,33 +2646,63 @@ class MainActivity : AppCompatActivity() {
             val outXmm = outXmmRaw.coerceIn(0f, allowedMaxXmm)
             val outYmm = outYmmRaw.coerceIn(0f, allowedMaxYmm)
 
-            dialog.dismiss()
-            onResult(outXmm, outYmm)
+            dismissWithResult(outXmm, outYmm)
         }
 
-        dialog.setOnShowListener {
+        fun requestRender(keepCurrentPosition: Boolean) {
             scroller.post {
-                val contentRoot = runCatching {
-                    dialog.window?.decorView?.findViewById<View>(android.R.id.content) as? ViewGroup
-                }.getOrNull()
+                if (overlay.visibility != View.VISIBLE) return@post
 
                 var availW = stage.width
                 if (availW <= 0) availW = scroller.width
                 if (availW <= 0) availW = thumbParent.width
                 if (availW <= 0) availW = dialogView.width
-                if (availW <= 0) availW = contentRoot?.width ?: 0
+                if (availW <= 0) availW = panel.width
+                if (availW <= 0) availW = overlay.width
+                if (availW <= 0) availW = 1
+
+                if (keepCurrentPosition && availW == lastRenderedAvailW) {
+                    return@post
+                }
+                lastRenderedAvailW = availW
+
+                val carryXmm = if (keepCurrentPosition && okReady && pxPerMMX > 0f && pxPerMMY > 0f) {
+                    val leftWithin = (currentLeft - pageLeft).toFloat()
+                    (leftWithin / pxPerMMX).coerceAtLeast(0f)
+                } else {
+                    initXmm
+                }
+
+                val carryYmm = if (keepCurrentPosition && okReady && pxPerMMX > 0f && pxPerMMY > 0f) {
+                    val topWithin = (currentTop - pageTop).toFloat()
+                    (topWithin / pxPerMMY).coerceAtLeast(0f)
+                } else {
+                    initYmm
+                }
+
+                okReady = false
 
                 val pageSize = if (isLand) PageSize.A4.rotate() else PageSize.A4
                 val pageAspect = pageSize.width / pageSize.height
 
-                val contentW = availW.coerceAtLeast(1)
+                val contentW = lastRenderedAvailW.coerceAtLeast(1)
                 val contentH = max(1, floor(contentW / pageAspect).toInt())
+
+                runCatching {
+                    pageView.setImageDrawable(null)
+                    lastPageBitmap?.let { if (!it.isRecycled) it.recycle() }
+                    lastPageBitmap = null
+                }
+                runCatching {
+                    sigView.setImageDrawable(null)
+                    lastSigBitmap?.let { if (!it.isRecycled) it.recycle() }
+                    lastSigBitmap = null
+                }
 
                 val plp = plpTempFile()
                 if (!plp.exists()) {
                     Toast.makeText(ctx, getString(R.string.temporary_pdf_not_found), Toast.LENGTH_LONG).show()
-                    dialog.dismiss()
-                    onResult(null, null)
+                    dismissWithResult(null, null)
                     return@post
                 }
 
@@ -2352,8 +2728,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (pageBmp == null) {
                     Toast.makeText(ctx, getString(R.string.failed_to_open_pdf_with_msg, "render"), Toast.LENGTH_LONG).show()
-                    dialog.dismiss()
-                    onResult(null, null)
+                    dismissWithResult(null, null)
                     return@post
                 }
 
@@ -2392,7 +2767,9 @@ class MainActivity : AppCompatActivity() {
                         gravity = Gravity.CENTER
                     }
                 }
+
                 pageView.setImageBitmap(pageBmp)
+                lastPageBitmap = pageBmp
                 pageView.requestLayout()
 
                 val sigBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -2417,8 +2794,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (sigBmp == null) {
                     Toast.makeText(ctx, getString(R.string.signature_image_invalid), Toast.LENGTH_LONG).show()
-                    dialog.dismiss()
-                    onResult(null, null)
+                    dismissWithResult(null, null)
                     return@post
                 }
 
@@ -2434,7 +2810,9 @@ class MainActivity : AppCompatActivity() {
                         height = desiredSigH
                     }
                 }
+
                 sigView.setImageBitmap(sigBmp)
+                lastSigBitmap = sigBmp
                 sigView.alpha = 1f
                 sigView.visibility = View.VISIBLE
                 sigView.bringToFront()
@@ -2454,8 +2832,8 @@ class MainActivity : AppCompatActivity() {
                 val allowedMaxLeftPx = floor(allowedMaxXmm * pxPerMMX).toInt()
                 val allowedMaxTopPx  = floor(allowedMaxYmm * pxPerMMY).toInt()
 
-                val initialLeftWithin = (initXmm * pxPerMMX).coerceIn(0f, allowedMaxLeftPx.toFloat())
-                val initialTopWithin  = (initYmm * pxPerMMY).coerceIn(0f, allowedMaxTopPx.toFloat())
+                val initialLeftWithin = (carryXmm * pxPerMMX).coerceIn(0f, allowedMaxLeftPx.toFloat())
+                val initialTopWithin  = (carryYmm * pxPerMMY).coerceIn(0f, allowedMaxTopPx.toFloat())
 
                 pageLeft = 0
                 pageTop  = 0
@@ -2480,8 +2858,40 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        dialog.setCanceledOnTouchOutside(true)
-        dialog.show()
+        signaturePositionEditorRerender = {
+            requestRender(true)
+        }
+
+        dialogView.post {
+            requestRender(false)
+        }
+
+        layoutRerenderRunnable = Runnable {
+
+            if (overlay.visibility != View.VISIBLE) return@Runnable
+            requestRender(true)
+        }
+
+        layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+
+            if (overlay.visibility != View.VISIBLE) return@OnLayoutChangeListener
+
+            val wNow = stage.width
+            if (wNow <= 0) return@OnLayoutChangeListener
+            if (wNow == lastRenderedAvailW) return@OnLayoutChangeListener
+
+            val rr = layoutRerenderRunnable
+            stage.removeCallbacks(rr)
+            stage.postDelayed(rr, 60)
+        }
+
+        stage.addOnLayoutChangeListener(layoutListener)
+        scroller.addOnLayoutChangeListener(layoutListener)
+        dialogView.addOnLayoutChangeListener(layoutListener)
+
+        overlay.setOnClickListener {
+            dismissWithResult(null, null)
+        }
     }
 
     private fun readImageBounds(path: String): Pair<Int, Int> {
@@ -2544,11 +2954,31 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Exception) { }
 
-        saveCurrentSettings()
+        val longOpRunning = runCatching {
+            isUiBlockedByProgress ||
+                    (::binding.isInitialized && (binding.overlayProgressDialog.isVisible || binding.overlayProgressDialogUpdateUi.isVisible))
+        }.getOrDefault(false)
+
+        if (!longOpRunning) {
+            saveCurrentSettings()
+        }
+
+        if (pendingCacheCleanupAfterExternalReturn) {
+            didPauseForExternalAction = true
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+
+        hasWindowFocusFlag = hasFocus
+
+        if (!hasFocus) {
+            try {
+                binding.rvThumbnails.parent?.requestDisallowInterceptTouchEvent(false)
+            } catch (_: Exception) {
+            }
+        }
 
         if (hasFocus) {
             try {
@@ -2568,11 +2998,34 @@ class MainActivity : AppCompatActivity() {
             restoreImeAfterBackground = false
             restoreImeAfterBackgroundEditTextId = View.NO_ID
             restoreImeAfterBackgroundWasActive = false
+
+            if (pendingRvUpdate) {
+                pendingRvUpdate = false
+                requestRvThumbnailsHeightUpdate()
+            }
+
+            window?.decorView?.post {
+                if (isFinishing || isDestroyed) return@post
+                maybeRunDeferredUiModeRecreate()
+            }
         }
     }
 
     override fun onDestroy() {
-        if (::progressDialog.isInitialized && progressDialog.isShowing) progressDialog.dismiss()
+
+        runCatching {
+            if (::binding.isInitialized) {
+                binding.overlayProgressDialog.visibility = View.GONE
+                binding.overlayProgressDialogUpdateUi.visibility = View.GONE
+            }
+        }.onFailure {
+        }
+
+        signaturePositionEditorDialog?.let { dlg ->
+            if (dlg.isShowing) dlg.dismiss()
+        }
+        signaturePositionEditorDialog = null
+        signaturePositionEditorRerender = null
         saveCurrentSettings()
         (findViewById<RecyclerView>(R.id.rv_thumbnails).adapter as? ThumbnailAdapter)?.close()
         if (!isChangingConfigurations) clearCacheDir()
@@ -2582,53 +3035,55 @@ class MainActivity : AppCompatActivity() {
     private fun snapshotInitialPrefsIfNeeded() {
         val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
 
-        if (sp.getBoolean(KEY_FIRST_RUN_INITIALIZED, false)) return
+        synchronized(prefsBackupLock) {
+            if (sp.getBoolean(KEY_FIRST_RUN_INITIALIZED, false)) return
 
-        sp.edit {
-            putString(KEY_ROWS, "1")
-            putString(KEY_NORMAL_ROWS, "1")
-            putString(KEY_LABEL_ROWS, "2")
-            putString(KEY_COLUMNS, "1")
-            putString(KEY_NORMAL_COLUMNS, "1")
-            putString(KEY_LABEL_COLUMNS, "2")
-            putString(KEY_BATCH_PAGE, "20")
-            putString(KEY_NORMAL_BATCH_PAGE, "20")
-            putString(KEY_LABEL_BATCH_PAGE, "20")
-            putBoolean(KEY_SCALE, false)
-            putBoolean(KEY_NORMAL_SCALE, false)
-            putBoolean(KEY_LABEL_SCALE, true)
-            putBoolean(KEY_FIT, false)
-            putBoolean(KEY_NORMAL_FIT, false)
-            putBoolean(KEY_LABEL_FIT, false)
-            putString(KEY_MARGIN, "0")
-            putString(KEY_NORMAL_MARGIN, "0")
-            putString(KEY_LABEL_MARGIN, "2")
-            putBoolean(KEY_ORIENTATION, true)
-            putBoolean(KEY_NORMAL_ORIENTATION, true)
-            putBoolean(KEY_LABEL_ORIENTATION, true)
-            putBoolean(KEY_DRAW_FRAME, false)
-            putBoolean(KEY_NORMAL_DRAW_FRAME, false)
-            putBoolean(KEY_LABEL_DRAW_FRAME, false)
-            putString(KEY_SIG_POS_X, "155")
-            putString(KEY_NORMAL_SIG_POS_X, "155")
-            putString(KEY_LABEL_SIG_POS_X, "155")
-            putString(KEY_SIG_POS_Y, "245")
-            putString(KEY_NORMAL_SIG_POS_Y, "245")
-            putString(KEY_LABEL_SIG_POS_Y, "245")
-            putBoolean(KEY_PASSWORD_OUT, false)
-            putBoolean(KEY_NORMAL_PASSWORD_OUT, false)
-            putBoolean(KEY_LABEL_PASSWORD_OUT, false)
-            putString(KEY_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal))
-            putString(KEY_NORMAL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal))
-            putString(KEY_LABEL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_label))
-            putInt(KEY_LAST_SIG_DPI_INDEX, 0)
-            putBoolean(KEY_LAST_SCAN_EFFECT, false)
-            putBoolean(KEY_LAST_GRAYSCALE, false)
-            putBoolean(KEY_LAST_INNER_PDF_READER, true)
-            putString(KEY_LAST_LOADED_PROFILE, "normal")
-            putString(KEY_THEME_MODE, "system")
-            putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
-            putBoolean(KEY_FIRST_RUN_INITIALIZED, true)
+            sp.edit {
+                putString(KEY_ROWS, "1")
+                putString(KEY_NORMAL_ROWS, "1")
+                putString(KEY_LABEL_ROWS, "2")
+                putString(KEY_COLUMNS, "1")
+                putString(KEY_NORMAL_COLUMNS, "1")
+                putString(KEY_LABEL_COLUMNS, "2")
+                putString(KEY_BATCH_PAGE, "20")
+                putString(KEY_NORMAL_BATCH_PAGE, "20")
+                putString(KEY_LABEL_BATCH_PAGE, "20")
+                putBoolean(KEY_SCALE, false)
+                putBoolean(KEY_NORMAL_SCALE, false)
+                putBoolean(KEY_LABEL_SCALE, true)
+                putBoolean(KEY_FIT, false)
+                putBoolean(KEY_NORMAL_FIT, false)
+                putBoolean(KEY_LABEL_FIT, false)
+                putString(KEY_MARGIN, "0")
+                putString(KEY_NORMAL_MARGIN, "0")
+                putString(KEY_LABEL_MARGIN, "2")
+                putBoolean(KEY_ORIENTATION, true)
+                putBoolean(KEY_NORMAL_ORIENTATION, true)
+                putBoolean(KEY_LABEL_ORIENTATION, true)
+                putBoolean(KEY_DRAW_FRAME, false)
+                putBoolean(KEY_NORMAL_DRAW_FRAME, false)
+                putBoolean(KEY_LABEL_DRAW_FRAME, false)
+                putString(KEY_SIG_POS_X, "155")
+                putString(KEY_NORMAL_SIG_POS_X, "155")
+                putString(KEY_LABEL_SIG_POS_X, "155")
+                putString(KEY_SIG_POS_Y, "245")
+                putString(KEY_NORMAL_SIG_POS_Y, "245")
+                putString(KEY_LABEL_SIG_POS_Y, "245")
+                putBoolean(KEY_PASSWORD_OUT, false)
+                putBoolean(KEY_NORMAL_PASSWORD_OUT, false)
+                putBoolean(KEY_LABEL_PASSWORD_OUT, false)
+                putString(KEY_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal))
+                putString(KEY_NORMAL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal))
+                putString(KEY_LABEL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_label))
+                putInt(KEY_LAST_SIG_DPI_INDEX, 0)
+                putBoolean(KEY_LAST_SCAN_EFFECT, false)
+                putBoolean(KEY_LAST_GRAYSCALE, false)
+                putBoolean(KEY_LAST_INNER_PDF_READER, true)
+                putString(KEY_LAST_LOADED_PROFILE, "normal")
+                putString(KEY_THEME_MODE, "system")
+                putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+                putBoolean(KEY_FIRST_RUN_INITIALIZED, true)
+            }
         }
     }
 
@@ -2636,99 +3091,119 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         val fileNameEt: EditText = findViewById(R.id.file_name)
 
-        prefs.edit {
-            val rows = numberOfRows.text.toString()
-            val columns = numberOfColumns.text.toString()
-            val marginVal = margin.text.toString()
-            val isPortrait = portrait.isChecked
-            val drawFrame = drawFrameSwitch.isChecked
-            val sigX = signaturePosX.text.toString()
-            val sigY = signaturePosY.text.toString()
-            val scale = scaleSwitch.isChecked
-            val fit = fitSwitch.isChecked
-            val fileNameTemplate = fileNameEt.text?.toString() ?: ""
-            val batchVal = batchPage.text.toString()
-            val passwordOutChecked = passwordOutCb.isChecked
+        synchronized(prefsBackupLock) {
+            prefs.edit {
+                val rows = numberOfRows.text.toString()
+                val columns = numberOfColumns.text.toString()
+                val marginVal = margin.text.toString()
+                val isPortrait = portrait.isChecked
+                val drawFrame = drawFrameSwitch.isChecked
+                val sigX = signaturePosX.text.toString()
+                val sigY = signaturePosY.text.toString()
+                val scale = scaleSwitch.isChecked
+                val fit = fitSwitch.isChecked
+                val fileNameTemplate = fileNameEt.text?.toString() ?: ""
+                val batchVal = batchPage.text.toString()
+                val passwordOutChecked = passwordOutCb.isChecked
 
-            when (type) {
-                "normal" -> {
-                    putString(KEY_NORMAL_ROWS, rows)
-                    putString(KEY_NORMAL_COLUMNS, columns)
-                    putString(KEY_NORMAL_MARGIN, marginVal)
-                    putBoolean(KEY_NORMAL_ORIENTATION, isPortrait)
-                    putBoolean(KEY_NORMAL_DRAW_FRAME, drawFrame)
-                    putString(KEY_NORMAL_SIG_POS_X, sigX)
-                    putString(KEY_NORMAL_SIG_POS_Y, sigY)
-                    putBoolean(KEY_NORMAL_SCALE, scale)
-                    putBoolean(KEY_NORMAL_FIT, fit)
-                    putString(KEY_NORMAL_BATCH_PAGE, batchVal)
-                    putBoolean(KEY_NORMAL_PASSWORD_OUT, passwordOutChecked)
-                    putString(KEY_NORMAL_FILE_NAME_TEMPLATE, fileNameTemplate)
+                when (type) {
+                    "normal" -> {
+                        putString(KEY_NORMAL_ROWS, rows)
+                        putString(KEY_NORMAL_COLUMNS, columns)
+                        putString(KEY_NORMAL_MARGIN, marginVal)
+                        putBoolean(KEY_NORMAL_ORIENTATION, isPortrait)
+                        putBoolean(KEY_NORMAL_DRAW_FRAME, drawFrame)
+                        putString(KEY_NORMAL_SIG_POS_X, sigX)
+                        putString(KEY_NORMAL_SIG_POS_Y, sigY)
+                        putBoolean(KEY_NORMAL_SCALE, scale)
+                        putBoolean(KEY_NORMAL_FIT, fit)
+                        putString(KEY_NORMAL_BATCH_PAGE, batchVal)
+                        putBoolean(KEY_NORMAL_PASSWORD_OUT, passwordOutChecked)
+                        putString(KEY_NORMAL_FILE_NAME_TEMPLATE, fileNameTemplate)
+                    }
+
+                    "label" -> {
+                        putString(KEY_LABEL_ROWS, rows)
+                        putString(KEY_LABEL_COLUMNS, columns)
+                        putString(KEY_LABEL_MARGIN, marginVal)
+                        putBoolean(KEY_LABEL_ORIENTATION, isPortrait)
+                        putBoolean(KEY_LABEL_DRAW_FRAME, drawFrame)
+                        putString(KEY_LABEL_SIG_POS_X, sigX)
+                        putString(KEY_LABEL_SIG_POS_Y, sigY)
+                        putBoolean(KEY_LABEL_SCALE, scale)
+                        putBoolean(KEY_LABEL_FIT, fit)
+                        putString(KEY_LABEL_BATCH_PAGE, batchVal)
+                        putBoolean(KEY_LABEL_PASSWORD_OUT, passwordOutChecked)
+                        putString(KEY_LABEL_FILE_NAME_TEMPLATE, fileNameTemplate)
+                    }
                 }
-                "label" -> {
-                    putString(KEY_LABEL_ROWS, rows)
-                    putString(KEY_LABEL_COLUMNS, columns)
-                    putString(KEY_LABEL_MARGIN, marginVal)
-                    putBoolean(KEY_LABEL_ORIENTATION, isPortrait)
-                    putBoolean(KEY_LABEL_DRAW_FRAME, drawFrame)
-                    putString(KEY_LABEL_SIG_POS_X, sigX)
-                    putString(KEY_LABEL_SIG_POS_Y, sigY)
-                    putBoolean(KEY_LABEL_SCALE, scale)
-                    putBoolean(KEY_LABEL_FIT, fit)
-                    putString(KEY_LABEL_BATCH_PAGE, batchVal)
-                    putBoolean(KEY_LABEL_PASSWORD_OUT, passwordOutChecked)
-                    putString(KEY_LABEL_FILE_NAME_TEMPLATE, fileNameTemplate)
-                }
+                putString(KEY_ROWS, rows)
+                putString(KEY_COLUMNS, columns)
+                putString(KEY_MARGIN, marginVal)
+                putBoolean(KEY_ORIENTATION, isPortrait)
+                putBoolean(KEY_DRAW_FRAME, drawFrame)
+                putString(KEY_SIG_POS_X, sigX)
+                putString(KEY_SIG_POS_Y, sigY)
+                putBoolean(KEY_SCALE, scale)
+                putBoolean(KEY_FIT, fit)
+                putString(KEY_BATCH_PAGE, batchVal)
+                putBoolean(KEY_PASSWORD_OUT, passwordOutChecked)
+                putString(KEY_FILE_NAME_TEMPLATE, fileNameTemplate)
             }
-            putString(KEY_ROWS, rows)
-            putString(KEY_COLUMNS, columns)
-            putString(KEY_MARGIN, marginVal)
-            putBoolean(KEY_ORIENTATION, isPortrait)
-            putBoolean(KEY_DRAW_FRAME, drawFrame)
-            putString(KEY_SIG_POS_X, sigX)
-            putString(KEY_SIG_POS_Y, sigY)
-            putBoolean(KEY_SCALE, scale)
-            putBoolean(KEY_FIT, fit)
-            putString(KEY_BATCH_PAGE, batchVal)
-            putBoolean(KEY_PASSWORD_OUT, passwordOutChecked)
-            putString(KEY_FILE_NAME_TEMPLATE, fileNameTemplate)
+            Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
         }
-        Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
     }
 
     private fun saveCurrentSettings() {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         val fileNameEt: EditText = findViewById(R.id.file_name)
-        prefs.edit {
-            putString(KEY_ROWS, numberOfRows.text.toString())
-            putString(KEY_COLUMNS, numberOfColumns.text.toString())
-            putString(KEY_MARGIN, margin.text.toString())
-            putBoolean(KEY_ORIENTATION, portrait.isChecked)
-            putBoolean(KEY_DRAW_FRAME, drawFrameSwitch.isChecked)
-            putString(KEY_SIG_POS_X, signaturePosX.text.toString())
-            putString(KEY_SIG_POS_Y, signaturePosY.text.toString())
-            putBoolean(KEY_SCALE, scaleSwitch.isChecked)
-            putBoolean(KEY_FIT, fitSwitch.isChecked)
-            putString(KEY_BATCH_PAGE, batchPage.text.toString())
-            putBoolean(KEY_PASSWORD_OUT, passwordOutCb.isChecked)
-            putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
+
+        synchronized(prefsBackupLock) {
+            prefs.edit {
+                putString(KEY_ROWS, numberOfRows.text.toString())
+                putString(KEY_COLUMNS, numberOfColumns.text.toString())
+                putString(KEY_MARGIN, margin.text.toString())
+                putBoolean(KEY_ORIENTATION, portrait.isChecked)
+                putBoolean(KEY_DRAW_FRAME, drawFrameSwitch.isChecked)
+                putString(KEY_SIG_POS_X, signaturePosX.text.toString())
+                putString(KEY_SIG_POS_Y, signaturePosY.text.toString())
+                putBoolean(KEY_SCALE, scaleSwitch.isChecked)
+                putBoolean(KEY_FIT, fitSwitch.isChecked)
+                putString(KEY_BATCH_PAGE, batchPage.text.toString())
+                putBoolean(KEY_PASSWORD_OUT, passwordOutCb.isChecked)
+                putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
+            }
         }
     }
 
     private fun loadSettings() {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
 
-        val rows = prefs.getString(KEY_ROWS, "1") ?: "1"
-        val columns = prefs.getString(KEY_COLUMNS, "1") ?: "1"
-        val marginVal = prefs.getString(KEY_MARGIN, "0") ?: "0"
-        val isPortrait = prefs.getBoolean(KEY_ORIENTATION, true)
-        val drawFrame = prefs.getBoolean(KEY_DRAW_FRAME, false)
-        val sigX = prefs.getString(KEY_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()
-        val sigY = prefs.getString(KEY_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()
-        val scale = prefs.getBoolean(KEY_SCALE, false)
-        val fit = prefs.getBoolean(KEY_FIT, false)
-        val batchVal = prefs.getString(KEY_BATCH_PAGE, "20") ?: "20"
-        val passwordOutChecked = prefs.getBoolean(KEY_PASSWORD_OUT, false)
+        val rows: String
+        val columns: String
+        val marginVal: String
+        val isPortrait: Boolean
+        val drawFrame: Boolean
+        val sigX: String
+        val sigY: String
+        val scale: Boolean
+        val fit: Boolean
+        val batchVal: String
+        val passwordOutChecked: Boolean
+
+        synchronized(prefsBackupLock) {
+            rows = prefs.getString(KEY_ROWS, "1") ?: "1"
+            columns = prefs.getString(KEY_COLUMNS, "1") ?: "1"
+            marginVal = prefs.getString(KEY_MARGIN, "0") ?: "0"
+            isPortrait = prefs.getBoolean(KEY_ORIENTATION, true)
+            drawFrame = prefs.getBoolean(KEY_DRAW_FRAME, false)
+            sigX = prefs.getString(KEY_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()
+            sigY = prefs.getString(KEY_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()
+            scale = prefs.getBoolean(KEY_SCALE, false)
+            fit = prefs.getBoolean(KEY_FIT, false)
+            batchVal = prefs.getString(KEY_BATCH_PAGE, "20") ?: "20"
+            passwordOutChecked = prefs.getBoolean(KEY_PASSWORD_OUT, false)
+        }
 
         numberOfRows.setText(rows)
         numberOfColumns.setText(columns)
@@ -2753,7 +3228,9 @@ class MainActivity : AppCompatActivity() {
 
         val fileNameEt: EditText = findViewById(R.id.file_name)
         val defaultTemplate = getString(R.string.default_tmpl_normal)
-        val tmpl = prefs.getString(KEY_FILE_NAME_TEMPLATE, defaultTemplate) ?: defaultTemplate
+        val tmpl = synchronized(prefsBackupLock) {
+            prefs.getString(KEY_FILE_NAME_TEMPLATE, defaultTemplate) ?: defaultTemplate
+        }
         fileNameEt.setText(tmpl)
 
         if (fileNameEt.getTag(R.id.file_name) != true) {
@@ -2776,12 +3253,6 @@ class MainActivity : AppCompatActivity() {
 
         updateFileNameHintBasedOnRowsCols()
         validateInputs()
-
-        lifecycleScope.launch {
-            backupSelectionState()
-
-            backupInitialState()
-        }
     }
 
     private fun loadSettings(type: String) {
@@ -2791,36 +3262,58 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
                 val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                when (type) {
-                    "normal" -> mapOf(
-                        "nlRows" to (prefs.getString(KEY_NORMAL_ROWS, "1") ?: "1"),
-                        "nlColumns" to (prefs.getString(KEY_NORMAL_COLUMNS, "1") ?: "1"),
-                        "nlMargin" to (prefs.getString(KEY_NORMAL_MARGIN, "0") ?: "0"),
-                        "nlOrientation" to prefs.getBoolean(KEY_NORMAL_ORIENTATION, true),
-                        "nlDrawFrame" to prefs.getBoolean(KEY_NORMAL_DRAW_FRAME, false),
-                        "nlSigPosX" to (prefs.getString(KEY_NORMAL_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()),
-                        "nlSigPosY" to (prefs.getString(KEY_NORMAL_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()),
-                        "nlScale" to prefs.getBoolean(KEY_NORMAL_SCALE, false),
-                        "nlFit" to prefs.getBoolean(KEY_NORMAL_FIT, false),
-                        "nlBatchPage" to (prefs.getString(KEY_NORMAL_BATCH_PAGE, "20") ?: "20"),
-                        "nlPasswordOut" to prefs.getBoolean(KEY_NORMAL_PASSWORD_OUT, false),
-                        "nlFileNameTemplate" to (prefs.getString(KEY_NORMAL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_normal)) ?: getString(R.string.default_tmpl_normal))
-                    )
-                    "label" -> mapOf(
-                        "nlRows" to (prefs.getString(KEY_LABEL_ROWS, "2") ?: "2"),
-                        "nlColumns" to (prefs.getString(KEY_LABEL_COLUMNS, "2") ?: "2"),
-                        "nlMargin" to (prefs.getString(KEY_LABEL_MARGIN, "2") ?: "2"),
-                        "nlOrientation" to prefs.getBoolean(KEY_LABEL_ORIENTATION, true),
-                        "nlDrawFrame" to prefs.getBoolean(KEY_LABEL_DRAW_FRAME, false),
-                        "nlSigPosX" to (prefs.getString(KEY_LABEL_SIG_POS_X, DEFAULT_SIG_POS_X_MM.toString()) ?: DEFAULT_SIG_POS_X_MM.toString()),
-                        "nlSigPosY" to (prefs.getString(KEY_LABEL_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()),
-                        "nlScale" to prefs.getBoolean(KEY_LABEL_SCALE, true),
-                        "nlFit" to prefs.getBoolean(KEY_LABEL_FIT, false),
-                        "nlBatchPage" to (prefs.getString(KEY_LABEL_BATCH_PAGE, "20") ?: "20"),
-                        "nlPasswordOut" to prefs.getBoolean(KEY_LABEL_PASSWORD_OUT, false),
-                        "nlFileNameTemplate" to (prefs.getString(KEY_LABEL_FILE_NAME_TEMPLATE, getString(R.string.default_tmpl_label)) ?: getString(R.string.default_tmpl_label))
-                    )
-                    else -> emptyMap()
+                synchronized(prefsBackupLock) {
+                    when (type) {
+                        "normal" -> mapOf(
+                            "nlRows" to (prefs.getString(KEY_NORMAL_ROWS, "1") ?: "1"),
+                            "nlColumns" to (prefs.getString(KEY_NORMAL_COLUMNS, "1") ?: "1"),
+                            "nlMargin" to (prefs.getString(KEY_NORMAL_MARGIN, "0") ?: "0"),
+                            "nlOrientation" to prefs.getBoolean(KEY_NORMAL_ORIENTATION, true),
+                            "nlDrawFrame" to prefs.getBoolean(KEY_NORMAL_DRAW_FRAME, false),
+                            "nlSigPosX" to (prefs.getString(
+                                KEY_NORMAL_SIG_POS_X,
+                                DEFAULT_SIG_POS_X_MM.toString()
+                            ) ?: DEFAULT_SIG_POS_X_MM.toString()),
+                            "nlSigPosY" to (prefs.getString(
+                                KEY_NORMAL_SIG_POS_Y,
+                                DEFAULT_SIG_POS_Y_MM.toString()
+                            ) ?: DEFAULT_SIG_POS_Y_MM.toString()),
+                            "nlScale" to prefs.getBoolean(KEY_NORMAL_SCALE, false),
+                            "nlFit" to prefs.getBoolean(KEY_NORMAL_FIT, false),
+                            "nlBatchPage" to (prefs.getString(KEY_NORMAL_BATCH_PAGE, "20") ?: "20"),
+                            "nlPasswordOut" to prefs.getBoolean(KEY_NORMAL_PASSWORD_OUT, false),
+                            "nlFileNameTemplate" to (prefs.getString(
+                                KEY_NORMAL_FILE_NAME_TEMPLATE,
+                                getString(R.string.default_tmpl_normal)
+                            ) ?: getString(R.string.default_tmpl_normal))
+                        )
+
+                        "label" -> mapOf(
+                            "nlRows" to (prefs.getString(KEY_LABEL_ROWS, "2") ?: "2"),
+                            "nlColumns" to (prefs.getString(KEY_LABEL_COLUMNS, "2") ?: "2"),
+                            "nlMargin" to (prefs.getString(KEY_LABEL_MARGIN, "2") ?: "2"),
+                            "nlOrientation" to prefs.getBoolean(KEY_LABEL_ORIENTATION, true),
+                            "nlDrawFrame" to prefs.getBoolean(KEY_LABEL_DRAW_FRAME, false),
+                            "nlSigPosX" to (prefs.getString(
+                                KEY_LABEL_SIG_POS_X,
+                                DEFAULT_SIG_POS_X_MM.toString()
+                            ) ?: DEFAULT_SIG_POS_X_MM.toString()),
+                            "nlSigPosY" to (prefs.getString(
+                                KEY_LABEL_SIG_POS_Y,
+                                DEFAULT_SIG_POS_Y_MM.toString()
+                            ) ?: DEFAULT_SIG_POS_Y_MM.toString()),
+                            "nlScale" to prefs.getBoolean(KEY_LABEL_SCALE, true),
+                            "nlFit" to prefs.getBoolean(KEY_LABEL_FIT, false),
+                            "nlBatchPage" to (prefs.getString(KEY_LABEL_BATCH_PAGE, "20") ?: "20"),
+                            "nlPasswordOut" to prefs.getBoolean(KEY_LABEL_PASSWORD_OUT, false),
+                            "nlFileNameTemplate" to (prefs.getString(
+                                KEY_LABEL_FILE_NAME_TEMPLATE,
+                                getString(R.string.default_tmpl_label)
+                            ) ?: getString(R.string.default_tmpl_label))
+                        )
+
+                        else -> emptyMap()
+                    }
                 }
             }
 
@@ -2842,9 +3335,12 @@ class MainActivity : AppCompatActivity() {
             val fileNameEt: EditText = findViewById(R.id.file_name)
             fileNameEt.setText(data["nlFileNameTemplate"] as String)
 
-            getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE).edit {
-                putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
-                putString(KEY_LAST_LOADED_PROFILE, type)
+            val prefs2 = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            synchronized(prefsBackupLock) {
+                prefs2.edit {
+                    putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
+                    putString(KEY_LAST_LOADED_PROFILE, type)
+                }
             }
 
             updateFileNameHintBasedOnRowsCols()
@@ -3088,144 +3584,122 @@ class MainActivity : AppCompatActivity() {
 
         PdfProcessingForegroundService.start(this, resolvedMessage)
 
-        if (!::progressDialog.isInitialized || !progressDialog.isShowing) {
-            val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog_update_ui, null)
+        runCatching {
+            val panel = binding.overlayProgressDialogUpdateUiPanel
+            panel.removeAllViews()
+            val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog_update_ui, panel, false)
             view.findViewById<MaterialTextView>(R.id.progress_bar_update_ui_simple_text)?.text = resolvedMessage
-
-            progressDialog = MaterialAlertDialogBuilder(this)
-                .setView(view)
-                .setCancelable(false)
-                .create().apply {
-                    setCanceledOnTouchOutside(false)
-                    show()
-                }
-        } else {
-            progressDialog.findViewById<MaterialTextView>(R.id.progress_bar_update_ui_simple_text)?.text = resolvedMessage
+            panel.addView(view)
+            binding.overlayProgressDialogUpdateUi.visibility = View.VISIBLE
+        }.onFailure {
         }
 
-        window?.setFlags(
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        )
+        isUiBlockedByProgress = true
     }
+
 
     private fun hideInProgressIfShownUpdateUI() {
         PdfProcessingForegroundService.stop(this)
 
-        if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            progressDialog.dismiss()
+        runCatching {
+            binding.overlayProgressDialogUpdateUi.visibility = View.GONE
+        }.onFailure {
         }
 
-        window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        isUiBlockedByProgress = false
     }
 
     private suspend fun backupSelectionState() {
-        val selected = withContext(Dispatchers.Main.immediate) {
-            viewModel.pageItems
+        val selectedCsv: String
+        val firstPos: Int
+        val topOffset: Int
+
+        withContext(Dispatchers.Main.immediate) {
+            selectedCsv = viewModel.pageItems
                 .mapIndexedNotNull { idx, item -> if (item.isSelected) idx else null }
                 .joinToString(",")
-        }
 
-        withContext(Dispatchers.IO) {
-            getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE).edit {
-                remove(KEY_BACKUP_SELECTED)
-                putString(KEY_BACKUP_SELECTED, selected)
-            }
-        }
-    }
-
-    private suspend fun backupInitialState() {
-        val snap = withContext(Dispatchers.Main.immediate) {
-            InitialStateSnapBackup(
-                rows = numberOfRows.text.toString(),
-                columns = numberOfColumns.text.toString(),
-                marginVal = margin.text.toString(),
-                isPortrait = portrait.isChecked,
-                drawFrame = drawFrameSwitch.isChecked,
-                scale = scaleSwitch.isChecked,
-                fit = fitSwitch.isChecked,
-                rotation = sourceRotation.joinToString(",")
-            )
+            val lm = binding.rvThumbnails.layoutManager as? LinearLayoutManager
+            firstPos = lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+            topOffset = if (firstPos != RecyclerView.NO_POSITION) {
+                lm?.findViewByPosition(firstPos)?.top ?: 0
+            } else 0
         }
 
         withContext(Dispatchers.IO) {
             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            prefs.edit {
-                remove(KEY_BACKUP_ROWS)
-                remove(KEY_BACKUP_COLUMNS)
-                remove(KEY_BACKUP_MARGIN)
-                remove(KEY_BACKUP_ORIENTATION)
-                remove(KEY_BACKUP_DRAW_FRAME)
-                remove(KEY_BACKUP_SCALE)
-                remove(KEY_BACKUP_FIT)
-                remove(KEY_BACKUP_ROTATION)
+            synchronized(prefsBackupLock) {
+                prefs.edit {
+                    remove(KEY_BACKUP_SELECTED)
+                    remove(KEY_BACKUP_THUMB_FIRST)
+                    remove(KEY_BACKUP_THUMB_OFFSET)
 
-                putString(KEY_BACKUP_ROWS, snap.rows)
-                putString(KEY_BACKUP_COLUMNS, snap.columns)
-                putString(KEY_BACKUP_MARGIN, snap.marginVal)
-                putBoolean(KEY_BACKUP_ORIENTATION, snap.isPortrait)
-                putBoolean(KEY_BACKUP_DRAW_FRAME, snap.drawFrame)
-                putBoolean(KEY_BACKUP_SCALE, snap.scale)
-                putBoolean(KEY_BACKUP_FIT, snap.fit)
-                putString(KEY_BACKUP_ROTATION, snap.rotation)
+                    putString(KEY_BACKUP_SELECTED, selectedCsv)
+                    putInt(KEY_BACKUP_THUMB_FIRST, firstPos)
+                    putInt(KEY_BACKUP_THUMB_OFFSET, topOffset)
+                }
             }
         }
     }
 
-    private fun loadBackupSettingsAndValidate(andThen: (() -> Unit)? = null) {
-        lifecycleScope.launch {
-            val data = withContext(Dispatchers.IO) {
-                val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                mapOf(
-                    "rows" to (prefs.getString(KEY_BACKUP_ROWS, null)),
-                    "columns" to (prefs.getString(KEY_BACKUP_COLUMNS, null)),
-                    "margin" to (prefs.getString(KEY_BACKUP_MARGIN, null)),
-                    "orientation" to prefs.getBoolean(KEY_BACKUP_ORIENTATION, true),
-                    "draw_frame" to prefs.getBoolean(KEY_BACKUP_DRAW_FRAME, false),
-                    "scale" to prefs.getBoolean(KEY_BACKUP_SCALE, false),
-                    "fit" to prefs.getBoolean(KEY_BACKUP_FIT, false),
-                    "rotation" to (prefs.getString(KEY_BACKUP_ROTATION, null))
-                )
-            }
+    private fun backupUiStateBeforeLongOperation() {
+        runCatching {
+            val cfg = lastBuiltNupConfig ?: currentNupConfigFromInputs()
 
-            suppressNup = true
-            try {
-                data["rows"]?.let { numberOfRows.setText(it as String) }
-                data["columns"]?.let { numberOfColumns.setText(it as String) }
-                data["margin"]?.let { margin.setText(it as String) }
+            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            val rotationCsv = sourceRotation.joinToString(",")
 
-                val isPortrait = data["orientation"] as Boolean
-                portrait.isChecked = isPortrait
-                landscape.isChecked = !isPortrait
+            synchronized(prefsBackupLock) {
+                prefs.edit {
+                    remove(KEY_BACKUP_ROWS)
+                    remove(KEY_BACKUP_COLUMNS)
+                    remove(KEY_BACKUP_MARGIN)
+                    remove(KEY_BACKUP_ORIENTATION)
+                    remove(KEY_BACKUP_DRAW_FRAME)
+                    remove(KEY_BACKUP_SCALE)
+                    remove(KEY_BACKUP_FIT)
+                    remove(KEY_BACKUP_ROTATION)
 
-                drawFrameSwitch.isChecked = data["draw_frame"] as Boolean
-                scaleSwitch.isChecked = data["scale"] as Boolean
-                fitSwitch.isChecked = data["fit"] as Boolean
-                fitSwitch.isEnabled = scaleSwitch.isChecked
-
-                val rotationStr = data["rotation"] as? String
-                if (!rotationStr.isNullOrEmpty()) {
-                    sourceRotation = rotationStr.split(",").mapNotNull { it.toIntOrNull() }.toIntArray()
-                } else if (rotationStr != null) {
-                    sourceRotation = IntArray(0)
+                    putString(KEY_BACKUP_ROWS, cfg.rows.toString())
+                    putString(KEY_BACKUP_COLUMNS, cfg.cols.toString())
+                    putString(KEY_BACKUP_MARGIN, cfg.marginMm.toString())
+                    putBoolean(KEY_BACKUP_ORIENTATION, !cfg.isLandscape)
+                    putBoolean(KEY_BACKUP_DRAW_FRAME, cfg.drawFrame)
+                    putBoolean(KEY_BACKUP_SCALE, cfg.scaleIndividually)
+                    putBoolean(KEY_BACKUP_FIT, cfg.fitIndividually)
+                    putString(KEY_BACKUP_ROTATION, rotationCsv)
                 }
-
-                runCatching {
-                    lastBuiltNupConfig = currentNupConfigFromInputs()
-                }
-
-            } finally {
-                suppressNup = false
             }
+        }.onFailure {
+        }
+    }
 
-            validateInputs()
-
-            andThen?.invoke()
+    private fun clearBackupStateKeysFromPrefs() {
+        runCatching {
+            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            synchronized(prefsBackupLock) {
+                prefs.edit {
+                    remove(KEY_BACKUP_SELECTED)
+                    remove(KEY_BACKUP_THUMB_FIRST)
+                    remove(KEY_BACKUP_THUMB_OFFSET)
+                    remove(KEY_BACKUP_ROWS)
+                    remove(KEY_BACKUP_COLUMNS)
+                    remove(KEY_BACKUP_MARGIN)
+                    remove(KEY_BACKUP_ORIENTATION)
+                    remove(KEY_BACKUP_DRAW_FRAME)
+                    remove(KEY_BACKUP_SCALE)
+                    remove(KEY_BACKUP_FIT)
+                    remove(KEY_BACKUP_ROTATION)
+                }
+            }
+        }.onFailure {
         }
     }
 
     private fun cancelLongRunningWorkAndCleanup() {
         isSigningCancelled = true
+
+        reloadThumbnailsGeneration++
 
         activeJobs.forEach { it.cancel() }
 
@@ -3236,17 +3710,48 @@ class MainActivity : AppCompatActivity() {
             activeJobs.joinAll()
             activeJobs.clear()
 
-            val selectedIdxBeforeCancel = run {
-                val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                sp.getString(KEY_BACKUP_SELECTED, "")
-                    ?.split(',')
-                    ?.mapNotNull { it.toIntOrNull() }
-                    ?.toSet()
-                    ?: emptySet()
+            val selectedIdxBeforeCancel: Set<Int>
+            val thumbFirstBeforeCancel: Int
+            val thumbOffsetBeforeCancel: Int
+
+            val rowsBeforeCancel: String
+            val columnsBeforeCancel: String
+            val marginBeforeCancel: String
+            val isPortraitBeforeCancel: Boolean
+            val drawFrameBeforeCancel: Boolean
+            val scaleBeforeCancel: Boolean
+            val fitBeforeCancel: Boolean
+            val rotationCsvBeforeCancel: String
+
+            withContext(Dispatchers.IO) {
+                val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                synchronized(prefsBackupLock) {
+                    selectedIdxBeforeCancel = prefs.getString(KEY_BACKUP_SELECTED, "")
+                        ?.split(',')
+                        ?.mapNotNull { it.toIntOrNull() }
+                        ?.toSet()
+                        ?: emptySet()
+
+                    thumbFirstBeforeCancel = prefs.getInt(KEY_BACKUP_THUMB_FIRST, RecyclerView.NO_POSITION)
+                    thumbOffsetBeforeCancel = prefs.getInt(KEY_BACKUP_THUMB_OFFSET, 0)
+
+                    rowsBeforeCancel = prefs.getString(KEY_BACKUP_ROWS, "1") ?: "1"
+                    columnsBeforeCancel = prefs.getString(KEY_BACKUP_COLUMNS, "1") ?: "1"
+                    marginBeforeCancel = prefs.getString(KEY_BACKUP_MARGIN, "0") ?: "0"
+                    isPortraitBeforeCancel = prefs.getBoolean(KEY_BACKUP_ORIENTATION, true)
+                    drawFrameBeforeCancel = prefs.getBoolean(KEY_BACKUP_DRAW_FRAME, false)
+                    scaleBeforeCancel = prefs.getBoolean(KEY_BACKUP_SCALE, false)
+                    fitBeforeCancel = prefs.getBoolean(KEY_BACKUP_FIT, false)
+                    rotationCsvBeforeCancel = prefs.getString(KEY_BACKUP_ROTATION, "") ?: ""
+                }
             }
+
+            clearBackupStateKeysFromPrefs()
 
             val sourceBackup = File(cacheDir, SOURCE_TEMP_COPY_NAME)
             val plpBackup = File(cacheDir, PLP_TEMP_COPY_NAME)
+
+            var restoredPlpBackup = false
 
             cacheDir.listFiles()?.forEach { f ->
                 if (f != sourceBackup && f != plpBackup) {
@@ -3275,22 +3780,66 @@ class MainActivity : AppCompatActivity() {
                             input.copyTo(output)
                         }
                     }
+                }.onSuccess {
+                    restoredPlpBackup = true
                 }
 
                 runCatching { plpBackup.delete() }
             }
 
-            loadBackupSettingsAndValidate {
-                reloadThumbnailsFromPlp(
-                    restorePrevious = true,
-                    indicesToSelect = selectedIdxBeforeCancel,
-                    releaseUiAtStart = false,
-                    onStarted = {
-                        unlockScreenOrientation()
-                        hideInProgressIfShownUpdateUI()
+            resetThumbDocKey("cancelLongRunningWorkAndCleanup")
+            
+            if (restoredPlpBackup) {
+                val prevSuppressNup = suppressNup
+                runCatching {
+                    suppressNup = true
+
+                    numberOfRows.setText(rowsBeforeCancel)
+                    numberOfColumns.setText(columnsBeforeCancel)
+                    margin.setText(marginBeforeCancel)
+
+                    portrait.isChecked = isPortraitBeforeCancel
+                    landscape.isChecked = !isPortraitBeforeCancel
+
+                    drawFrameSwitch.isChecked = drawFrameBeforeCancel
+                    scaleSwitch.isChecked = scaleBeforeCancel
+                    fitSwitch.isChecked = fitBeforeCancel
+                    fitSwitch.isEnabled = scaleSwitch.isChecked
+
+                    lastBuiltNupConfig = NupConfig(
+                        rowsBeforeCancel.toIntOrNull() ?: 1,
+                        columnsBeforeCancel.toIntOrNull() ?: 1,
+                        marginBeforeCancel.toIntOrNull() ?: 0,
+                        !isPortraitBeforeCancel,
+                        drawFrameBeforeCancel,
+                        scaleBeforeCancel,
+                        fitBeforeCancel
+                    )
+
+                    sourceRotation = if (rotationCsvBeforeCancel.isNotEmpty()) {
+                        rotationCsvBeforeCancel.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+                    } else {
+                        IntArray(0)
                     }
-                )
+
+                    suppressNup = prevSuppressNup
+                }.onFailure {
+                    suppressNup = prevSuppressNup
+                }
             }
+
+            reloadThumbnailsFromPlp(
+                targetIndex = thumbFirstBeforeCancel.takeIf { it != RecyclerView.NO_POSITION },
+                targetOffsetPx = thumbOffsetBeforeCancel,
+                restorePrevious = true,
+                indicesToSelect = selectedIdxBeforeCancel,
+                releaseUiAtStart = false,
+                onStarted = {
+                    unlockScreenOrientation()
+                    hideInProgressIfShownUpdateUI()
+                    isSigningCancelled = false
+                }
+            )
         }
     }
 
@@ -3299,13 +3848,26 @@ class MainActivity : AppCompatActivity() {
     ) {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_my) }
 
+        runCatching {
+            val wasShowingForBackup = (binding.overlayProgressDialog.isVisible)
+            if (!wasShowingForBackup) {
+                backupUiStateBeforeLongOperation()
+            }
+        }.onFailure {
+        }
+
         PdfProcessingForegroundService.start(this, resolvedMessage)
 
-        if (!::progressDialog.isInitialized || !progressDialog.isShowing) {
+        runCatching {
+            val wasShowing = (binding.overlayProgressDialog.isVisible)
 
-            backupTempFilesBeforeLongOperation()
+            if (!wasShowing) {
+                backupTempFilesBeforeLongOperation()
+            }
 
-            val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, null)
+            val panel = binding.overlayProgressDialogPanel
+            panel.removeAllViews()
+            val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, panel, false)
             view.findViewById<MaterialTextView>(R.id.progress_bar_simple_text)?.text = resolvedMessage
 
             val btnCancel = view.findViewById<MaterialButton>(R.id.progress_bar_cancel)
@@ -3317,21 +3879,12 @@ class MainActivity : AppCompatActivity() {
                 showInProgressUpdateUI()
             }
 
-            progressDialog = MaterialAlertDialogBuilder(this)
-                .setView(view)
-                .setCancelable(false)
-                .create().apply {
-                    setCanceledOnTouchOutside(false)
-                    show()
-                }
-        } else {
-            progressDialog.findViewById<MaterialTextView>(R.id.progress_bar_simple_text)?.text = resolvedMessage
+            panel.addView(view)
+            binding.overlayProgressDialog.visibility = View.VISIBLE
+        }.onFailure {
         }
 
-        window?.setFlags(
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        )
+        isUiBlockedByProgress = true
 
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
@@ -3339,11 +3892,13 @@ class MainActivity : AppCompatActivity() {
     private fun hideInProgressIfShown() {
         PdfProcessingForegroundService.stop(this)
 
-        if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            progressDialog.dismiss()
+        runCatching {
+            binding.overlayProgressDialog.visibility = View.GONE
+            binding.overlayProgressDialogUpdateUi.visibility = View.GONE
+        }.onFailure {
         }
 
-        window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        isUiBlockedByProgress = false
 
         window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
@@ -3381,10 +3936,6 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             regeneratePlpAsyncAndReloadThumbnails()
-        } else {
-            lifecycleScope.launch {
-                backupInitialState()
-            }
         }
     }
 
@@ -3440,8 +3991,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handlePdfUri(uri: Uri) {
-        showInProgress(getString(R.string.in_progress_opening))
-        lockScreenOrientation()
 
         val backupJob = lifecycleScope.launch {
             backupSelectionState()
@@ -3495,6 +4044,12 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (isImage) {
+
+                        withContext(Dispatchers.Main) {
+                            showInProgress(getString(R.string.in_progress_opening))
+                            lockScreenOrientation()
+                        }
+
                         val imagePdf = createTempPdfFromImageFile(tempSrc)
                         try {
                             appendPdfToSourceTemp(imagePdf, null)
@@ -3506,32 +4061,43 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         var passwordBytes: ByteArray? = null
                         var attempt = 0
+
                         while (true) {
-                            try {
-                                appendPdfToSourceTemp(tempSrc, passwordBytes)
-                                break
+                            val canOpen = try {
+                                PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { }
+                                true
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
                                 if (!isBadPassword(e)) throw e
+                                false
+                            }
 
+                            if (canOpen) break
+
+                            val entered: String? = withContext(Dispatchers.Main) {
+                                promptForPdfPassword(showError = (attempt > 0))
+                            }
+
+                            if (entered == null) {
                                 withContext(Dispatchers.Main) {
                                     hideInProgressIfShown()
+                                    unlockScreenOrientation()
                                 }
-                                val entered: String? = withContext(Dispatchers.Main) {
-                                    promptForPdfPassword(showError = (attempt > 0))
-                                }
-                                if (entered == null) {
-                                    withContext(Dispatchers.Main) { }
-                                    runCatching { tempSrc.delete() }
-                                    return@launch
-                                } else {
-                                    passwordBytes = entered.toByteArray(Charsets.UTF_8)
-                                    attempt++
-                                    withContext(Dispatchers.Main) { showInProgress(getString(R.string.in_progress_opening)) }
-                                }
+                                runCatching { tempSrc.delete() }
+                                return@launch
                             }
+
+                            passwordBytes = entered.toByteArray(Charsets.UTF_8)
+                            attempt++
                         }
+
+                        withContext(Dispatchers.Main) {
+                            showInProgress(getString(R.string.in_progress_opening))
+                            lockScreenOrientation()
+                        }
+
+                        appendPdfToSourceTemp(tempSrc, passwordBytes)
                     }
 
                     runCatching { tempSrc.delete() }
@@ -3780,159 +4346,43 @@ class MainActivity : AppCompatActivity() {
         return outFile
     }
 
+    private fun applySoftInputModeForPasswordOverlay() {
+        if (savedSoftInputModeForOverlay == null) {
+            savedSoftInputModeForOverlay = window.attributes.softInputMode
+        }
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+        )
+    }
+
+    private fun restoreSoftInputModeAfterPasswordOverlay() {
+        val old = savedSoftInputModeForOverlay ?: return
+        savedSoftInputModeForOverlay = null
+        window.setSoftInputMode(old)
+    }
+
+
     private fun setupPasswordInputForDialog(
-        dialog: AlertDialog,
         dialogView: View,
-        parent: ViewGroup,
-        indexInParent: Int,
-        lp: ViewGroup.LayoutParams,
         showError: Boolean,
         errorHintResId: Int? = null
-    ): TextInputEditText {
+    ): PasswordToggleEditText {
 
-        val listView = dialogView.findViewById<ListView>(R.id.listView)
-        parent.removeView(listView)
+        val et = dialogView.findViewById<PasswordToggleEditText>(R.id.pwd_edittext)
 
-        val asteriskTransformation = object : PasswordTransformationMethod() {
-            private inner class AsteriskCharSequence(private val source: CharSequence) : CharSequence {
-                override val length: Int get() = source.length
-                override fun get(index: Int): Char = '*'
-                override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
-                    AsteriskCharSequence(source.subSequence(startIndex, endIndex))
-                override fun toString(): String = "*".repeat(source.length)
-            }
-            override fun getTransformation(source: CharSequence?, view: View?): CharSequence {
-                return if (source == null) "" else AsteriskCharSequence(source)
-            }
-        }
-
-        class PasswordEditText(ctx: Context) : TextInputEditText(ctx) {
-            private var passwordVisible: Boolean = false
-            var iconTouchActive: Boolean = false
-
-            private fun updateIcon() {
-                runCatching {
-                    val resId = if (passwordVisible) R.drawable.ic_visibility_on_24 else R.drawable.ic_visibility_off_24
-                    val d = AppCompatResources.getDrawable(context, resId)?.mutate()
-                    TextViewCompat.setCompoundDrawableTintList(this, null)
-                    setCompoundDrawablesWithIntrinsicBounds(null, null, d, null)
-                    refreshDrawableState()
-                    invalidate()
-                }.onFailure {
-                    runCatching {
-                        val fallback = AppCompatResources.getDrawable(context, R.drawable.ic_visibility_off_24)?.mutate()
-                        setCompoundDrawablesWithIntrinsicBounds(null, null, fallback, null)
-                        refreshDrawableState()
-                        invalidate()
-                    }
-                }
-            }
-
-            private inner class SavedSelection(private val edit: TextInputEditText) : Closeable {
-                private val start = edit.selectionStart
-                private val end   = edit.selectionEnd
-                override fun close() {
-                    try {
-                        edit.setSelection(start, end.coerceAtLeast(start))
-                    } catch (_: Throwable) { }
-                }
-            }
-
-            fun toggleVisibility() {
-                SavedSelection(this).use {
-                    passwordVisible = !passwordVisible
-                    transformationMethod = if (passwordVisible) null else asteriskTransformation
-                }
-                updateIcon()
-                playSoundEffect(SoundEffectConstants.CLICK)
-                sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED)
-            }
-
-            override fun performClick(): Boolean {
-                super.performClick()
-                return true
-            }
-
-            fun setInitialStateMasked() {
-                transformationMethod = asteriskTransformation
-                updateIcon()
-                compoundDrawablePadding = (8 * resources.displayMetrics.density).toInt()
-                contentDescription = resources.getString(R.string.toggle_password_visibility)
-                TextViewCompat.setCompoundDrawableTintList(this, null)
-            }
-        }
-
-        val et = PasswordEditText(this).apply {
-            layoutParams = lp
-            hint = resources.getString(R.string.password_hint)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            setInitialStateMasked()
-            runCatching { TextViewCompat.setTextAppearance(this, R.style.TextAppearance_PdfLabelPrinting_EditText_Normal) }
-            runCatching {
-                setTextColor(AppCompatResources.getColorStateList(context, R.color.edittext_text_color)!!)
-            }.onFailure {
-                runCatching { setTextColor(ContextCompat.getColor(context, R.color.edittext_text_color)) }
-            }
-        }
+        runCatching { et.setInitialStateMasked() }
 
         et.setOnEditorActionListener { _, actionId, event ->
             val isEnter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
             if (actionId == EditorInfo.IME_ACTION_DONE || isEnter) {
-                dialog.findViewById<Button>(R.id.btn_ok)?.performClick()
+
+                dialogView.findViewById<Button>(R.id.pwd_ok)?.performClick()
                 true
             } else {
                 false
             }
         }
-
-        et.setOnTouchListener { v, ev ->
-            val endAbs = et.compoundDrawables[2]
-            val endDrawable = endAbs ?: return@setOnTouchListener false
-
-            val iconW = endDrawable.bounds.width()
-            val x = ev.x
-
-            fun isInsideIcon(): Boolean {
-                val iconLeft  = et.width - et.paddingRight - iconW
-                val iconRight = et.width - et.paddingRight
-                return x >= iconLeft && x <= iconRight
-            }
-
-            when (ev.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    if (isInsideIcon()) {
-                        et.iconTouchActive = true
-                        et.cancelLongPress()
-                        et.cancelPendingInputEvents()
-                        return@setOnTouchListener true
-                    }
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (et.iconTouchActive) {
-                        if (!isInsideIcon()) et.iconTouchActive = false
-                        return@setOnTouchListener true
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (et.iconTouchActive && isInsideIcon()) {
-                        et.toggleVisibility()
-                        v.performClick()
-                        et.cancelPendingInputEvents()
-                        et.iconTouchActive = false
-                        return@setOnTouchListener true
-                    }
-                    et.iconTouchActive = false
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    et.iconTouchActive = false
-                }
-            }
-            false
-        }
-
-        parent.addView(et, indexInParent)
 
         val originalHintColor = ContextCompat.getColor(this, R.color.password_hint_text_color)
         runCatching { et.setHintTextColor(originalHintColor) }
@@ -3954,23 +4404,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             et.addTextChangedListener(watcher)
-            dialog.setOnDismissListener {
-                runCatching { et.removeTextChangedListener(watcher) }
-            }
-        }
-
-        dialog.setOnShowListener {
-            runCatching {
-                et.requestFocus()
-                dialog.window?.setSoftInputMode(
-                    WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
-                )
-            }
-
-            et.post {
-                val imm2 = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-                runCatching { imm2?.hideSoftInputFromWindow(et.windowToken, 0) }
-            }
+        } else {
+            et.hint = resources.getString(R.string.password_hint)
+            runCatching { et.setHintTextColor(originalHintColor) }
         }
 
         return et
@@ -3978,60 +4414,101 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun promptForPdfPassword(showError: Boolean = false): String? =
         suspendCancellableCoroutine { cont ->
-            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
-            val dialog = MaterialAlertDialogBuilder(this)
-                .setView(dialogView)
-                .create()
+
+            PdfProcessingForegroundService.stop(this@MainActivity)
+            unlockScreenOrientation()
+
+            applySoftInputModeForPasswordOverlay()
+
+            val overlay = binding.overlayDialogPassword
+            val panel = binding.overlayDialogPasswordPanel
+
+            panel.removeAllViews()
+            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password, panel, false)
+            panel.addView(dialogView)
+
+            overlay.visibility = View.VISIBLE
+
+            overlay.setOnClickListener {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+                restoreSoftInputModeAfterPasswordOverlay()
+                if (!cont.isCompleted) cont.resume(null)
+            }
+            panel.setOnClickListener {
+            }
 
             (dialogView as? ViewGroup)?.let { vg ->
                 (vg.getChildAt(0) as? TextView)?.setText(R.string.enter_pdf_password)
             }
 
-            val listView = dialogView.findViewById<ListView>(R.id.listView)
-
-            val parent = listView.parent as ViewGroup
-            val indexInParent = parent.indexOfChild(listView)
-            val lp = listView.layoutParams
-
             val et = setupPasswordInputForDialog(
-                dialog = dialog,
                 dialogView = dialogView,
-                parent = parent,
-                indexInParent = indexInParent,
-                lp = lp,
                 showError = showError,
                 errorHintResId = null
             )
 
-            val btnNew    = dialogView.findViewById<Button>(R.id.btn_new)
-            val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-            val btnOk     = dialogView.findViewById<Button>(R.id.btn_ok)
-            val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-
-            btnNew.visibility = View.GONE
-            btnRemove.visibility = View.GONE
+            val btnOk     = dialogView.findViewById<Button>(R.id.pwd_ok)
+            val btnCancel = dialogView.findViewById<Button>(R.id.pwd_cancel)
 
             btnOk.setOnClickListener {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
                 val pwd = et.text?.toString()?.trim().orEmpty()
-                dialog.dismiss()
+
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+
+                restoreSoftInputModeAfterPasswordOverlay()
+
                 if (!cont.isCompleted) cont.resume(pwd)
             }
 
             btnCancel.setOnClickListener {
-                dialog.dismiss()
-                if (!cont.isCompleted) cont.resume(null)
-            }
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
 
-            dialog.setOnCancelListener {
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+
+                restoreSoftInputModeAfterPasswordOverlay()
+
                 if (!cont.isCompleted) cont.resume(null)
             }
 
             cont.invokeOnCancellation {
-                if (dialog.isShowing) dialog.dismiss()
+                runCatching {
+                    val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                    val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                    runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
+                    overlay.visibility = View.GONE
+                    overlay.setOnClickListener(null)
+
+                    restoreSoftInputModeAfterPasswordOverlay()
+                }.onFailure {
+                }
             }
 
-            dialog.show()
+            runCatching {
+                et.requestFocus()
+            }.onFailure {
+            }
+
+            et.post {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+            }
         }
+
 
     private fun extractFileName(uri: Uri): String {
         var result: String? = null
@@ -4373,8 +4850,16 @@ class MainActivity : AppCompatActivity() {
         releaseUiAtStart: Boolean = false,
         onStarted: (() -> Unit)? = null
     ) {
+        val myGen = ++reloadThumbnailsGeneration
+
         if (releaseUiAtStart) {
             hideInProgressIfShown()
+        }
+
+        val shouldDeferUnlock = (orientationLockPrevRequested != null)
+        if (shouldDeferUnlock) {
+            deferOrientationUnlockUntilThumbnailsReady = true
+            deferredOrientationUnlockRequested = false
         }
 
         val lm = binding.rvThumbnails.layoutManager as LinearLayoutManager
@@ -4382,6 +4867,83 @@ class MainActivity : AppCompatActivity() {
         val offset = lm.findViewByPosition(firstVisiblePosition)?.top ?: 0
 
         clearThumbnails()
+
+        var releasedUiOnce = false
+        var preDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+        var timeoutRunnable: Runnable? = null
+        val pendingKeys = LinkedHashSet<String>()
+
+        fun cleanupWaitersIfOwner() {
+            try {
+                preDrawListener?.let { l ->
+                    if (binding.rvThumbnails.viewTreeObserver.isAlive) {
+                        binding.rvThumbnails.viewTreeObserver.removeOnPreDrawListener(l)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            preDrawListener = null
+
+            timeoutRunnable?.let { r ->
+                binding.rvThumbnails.removeCallbacks(r)
+            }
+            timeoutRunnable = null
+
+            if (myGen == reloadThumbnailsGeneration) {
+                runCatching { adapter.setOnThumbnailCachedListener(null) }
+            }
+
+            pendingKeys.clear()
+        }
+
+        fun releaseDeferredUnlockAndInvokeOnStarted() {
+            if (releasedUiOnce) return
+
+            if (myGen != reloadThumbnailsGeneration) {
+                releasedUiOnce = true
+                cleanupWaitersIfOwner()
+                return
+            }
+
+            releasedUiOnce = true
+            cleanupWaitersIfOwner()
+
+            if (shouldDeferUnlock) {
+                deferOrientationUnlockUntilThumbnailsReady = false
+            }
+
+            onStarted?.invoke()
+
+            runCatching {
+                binding.overlayProgressDialog.findViewById<MaterialButton>(R.id.progress_bar_cancel)?.isEnabled = false
+
+                clearBackupStateKeysFromPrefs()
+            }
+
+            binding.overlayProgressDialog.post {
+                if (binding.overlayProgressDialog.isVisible) return@post
+                if (isSigningCancelled) return@post
+
+                runCatching {
+                    val srcCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
+                    if (srcCopy.exists()) srcCopy.delete()
+                }
+                runCatching {
+                    val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
+                    if (plpCopy.exists()) plpCopy.delete()
+                }
+            }
+
+            if (shouldDeferUnlock && deferredOrientationUnlockRequested) {
+                deferredOrientationUnlockRequested = false
+                unlockScreenOrientation()
+            }
+
+            binding.rvThumbnails.post {
+                if (isFinishing || isDestroyed) return@post
+                maybeRunDeferredUiModeRecreate()
+            }
+        }
 
         val job = lifecycleScope.launch {
             val items = withContext(Dispatchers.IO) {
@@ -4401,8 +4963,7 @@ class MainActivity : AppCompatActivity() {
                     val rows = max(1, min(100, cfg.rows))
                     val cols = max(1, min(100, cfg.cols))
                     val isLandscape = cfg.isLandscape
-                    val basePs = if (isLandscape) PageSize.A4.rotate()
-                    else PageSize.A4
+                    val basePs = if (isLandscape) PageSize.A4.rotate() else PageSize.A4
                     val isSingleUp = (rows * cols) == 1
 
                     val psForPlpPageFallback = if (isSingleUp) {
@@ -4438,8 +4999,8 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val batchSize = batchValueOrDefault1()
 
-                        val widths       = FloatArray(totalSrcPages) { fallbackW }
-                        val heights      = FloatArray(totalSrcPages) { fallbackH }
+                        val widths  = FloatArray(totalSrcPages) { fallbackW }
+                        val heights = FloatArray(totalSrcPages) { fallbackH }
 
                         var startPage = 0
                         while (startPage < totalSrcPages) {
@@ -4448,7 +5009,7 @@ class MainActivity : AppCompatActivity() {
                             val reader = PdfReader(srcFile.absolutePath)
                             val pdfDoc = PdfDocument(reader)
                             try {
-                                val srcPageCount   = pdfDoc.numberOfPages
+                                val srcPageCount = pdfDoc.numberOfPages
                                 val lastPageToRead = min(endExclusive, srcPageCount)
 
                                 for (pageZeroBased in startPage until lastPageToRead) {
@@ -4460,10 +5021,9 @@ class MainActivity : AppCompatActivity() {
                                         val w = box.width
                                         val h = box.height
 
-                                        widths[pageZeroBased]       = w
-                                        heights[pageZeroBased]      = h
+                                        widths[pageZeroBased] = w
+                                        heights[pageZeroBased] = h
                                     }.onFailure {
-
                                     }
                                 }
                             } finally {
@@ -4484,16 +5044,12 @@ class MainActivity : AppCompatActivity() {
                             val firstSrcPageZeroBased = g * per
 
                             val wPtsForLabel =
-                                if (firstSrcPageZeroBased in 0 until totalSrcPages)
-                                    widths[firstSrcPageZeroBased]
-                                else
-                                    fallbackW
+                                if (firstSrcPageZeroBased in 0 until totalSrcPages) widths[firstSrcPageZeroBased]
+                                else fallbackW
 
                             val hPtsForLabel =
-                                if (firstSrcPageZeroBased in 0 until totalSrcPages)
-                                    heights[firstSrcPageZeroBased]
-                                else
-                                    fallbackH
+                                if (firstSrcPageZeroBased in 0 until totalSrcPages) heights[firstSrcPageZeroBased]
+                                else fallbackH
 
                             list.add(
                                 PageItem(
@@ -4518,14 +5074,13 @@ class MainActivity : AppCompatActivity() {
 
             if (items.isEmpty()) {
                 updateButtonsState()
-                onStarted?.invoke()
+
+                releaseDeferredUnlockAndInvokeOnStarted()
                 return@launch
             }
 
             viewModel.pageItems.addAll(items)
             adapter.notifyItemRangeInserted(0, items.size)
-
-            onStarted?.invoke()
 
             binding.rvThumbnails.post {
                 val lm2 = binding.rvThumbnails.layoutManager as? LinearLayoutManager
@@ -4534,15 +5089,6 @@ class MainActivity : AppCompatActivity() {
                     targetIndex != null -> lm2?.scrollToPositionWithOffset(targetIndex, targetOffsetPx)
                     restorePrevious && firstVisiblePosition != RecyclerView.NO_POSITION ->
                         lm2?.scrollToPositionWithOffset(firstVisiblePosition, offset)
-                }
-
-                val f = lm2?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
-                val l = lm2?.findLastVisibleItemPosition() ?: RecyclerView.NO_POSITION
-                if (f != RecyclerView.NO_POSITION && l >= f) {
-                    adapter.notifyItemRangeChanged(f, l - f + 1, "force")
-                    val start = (f - 4).coerceAtLeast(0)
-                    val end   = (l + 4).coerceAtMost(adapter.itemCount - 1)
-                    adapter.prefetchAroundVisible(this@MainActivity, start..end)
                 }
 
                 indicesToSelect?.let { set ->
@@ -4555,25 +5101,116 @@ class MainActivity : AppCompatActivity() {
                     }
                     updateButtonsState()
                 }
+
+                timeoutRunnable = Runnable {
+                    if (isFinishing || isDestroyed) return@Runnable
+
+                    if (!releasedUiOnce && myGen == reloadThumbnailsGeneration) {
+                        releaseDeferredUnlockAndInvokeOnStarted()
+                    }
+                }
+                binding.rvThumbnails.postDelayed(timeoutRunnable!!, 10 * 60 * 1000L)
+
+                preDrawListener = object : ViewTreeObserver.OnPreDrawListener {
+                    override fun onPreDraw(): Boolean {
+                        if (releasedUiOnce) return true
+                        if (myGen != reloadThumbnailsGeneration) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                            return true
+                        }
+
+                        val f = lm2?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+                        val l = lm2?.findLastVisibleItemPosition() ?: RecyclerView.NO_POSITION
+                        if (f == RecyclerView.NO_POSITION || l == RecyclerView.NO_POSITION || l < f) {
+                            return true
+                        }
+
+                        try {
+                            if (binding.rvThumbnails.viewTreeObserver.isAlive) {
+                                binding.rvThumbnails.viewTreeObserver.removeOnPreDrawListener(this)
+                            }
+                        } catch (_: Exception) {
+                        }
+                        preDrawListener = null
+
+                        adapter.notifyItemRangeChanged(f, l - f + 1, "force")
+
+                        val start = (f - 4).coerceAtLeast(0)
+                        val end = (l + 4).coerceAtMost(adapter.itemCount - 1)
+                        if (start > end) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                            return true
+                        }
+
+                        val rangeToWait = start..end
+                        adapter.prefetchAroundVisible(this@MainActivity, rangeToWait)
+
+                        pendingKeys.clear()
+                        for (i in rangeToWait) {
+                            adapter.getCacheKeyForPosition(i)?.let { pendingKeys.add(it) }
+                        }
+
+                        run {
+                            val it = pendingKeys.iterator()
+                            while (it.hasNext()) {
+                                val k = it.next()
+                                if (adapter.isThumbnailCachedByKey(k)) it.remove()
+                            }
+                        }
+
+                        if (pendingKeys.isEmpty()) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                            return true
+                        }
+
+                        adapter.setOnThumbnailCachedListener { key ->
+                            if (releasedUiOnce) return@setOnThumbnailCachedListener
+                            if (myGen != reloadThumbnailsGeneration) return@setOnThumbnailCachedListener
+
+                            if (pendingKeys.remove(key)) {
+                                if (pendingKeys.isEmpty()) {
+                                    binding.rvThumbnails.post {
+                                        releaseDeferredUnlockAndInvokeOnStarted()
+                                    }
+                                }
+                            }
+                        }
+
+                        run {
+                            val it = pendingKeys.iterator()
+                            while (it.hasNext()) {
+                                val k = it.next()
+                                if (adapter.isThumbnailCachedByKey(k)) it.remove()
+                            }
+                        }
+                        if (pendingKeys.isEmpty()) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                        }
+
+                        return true
+                    }
+                }
+
+                try {
+                    binding.rvThumbnails.viewTreeObserver.addOnPreDrawListener(preDrawListener)
+                } catch (_: Exception) {
+                    releaseDeferredUnlockAndInvokeOnStarted()
+                }
             }
 
             updateButtonsState()
+        }
 
-            backupInitialState()
+        activeJobs.add(job)
+        job.invokeOnCompletion { cause ->
+            activeJobs.remove(job)
 
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    val srcCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
-                    if (srcCopy.exists()) srcCopy.delete()
-                }
-                runCatching {
-                    val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
-                    if (plpCopy.exists()) plpCopy.delete()
+            if (cause != null) {
+                binding.rvThumbnails.post {
+                    releaseDeferredUnlockAndInvokeOnStarted()
                 }
             }
         }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun mappingConfig(): NupConfig {
@@ -4852,9 +5489,9 @@ class MainActivity : AppCompatActivity() {
                 val remaining = total - toSkipCount
 
                 if (remaining <= 0) {
-                    if (source.exists()) source.delete()
-                    plpTempFile().delete()
+                    clearCacheDir()
                     sourceRotation = IntArray(0)
+
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
                         updateButtonsState()
@@ -5013,9 +5650,9 @@ class MainActivity : AppCompatActivity() {
 
                 val remaining = total - toSkip.size
                 if (remaining <= 0) {
-                    if (source.exists()) source.delete()
-                    plpTempFile().delete()
+                    clearCacheDir()
                     sourceRotation = IntArray(0)
+
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
                         updateButtonsState()
@@ -5153,7 +5790,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun cleanupOldExports(keepRecent: Int = KEEP_RECENT_EXPORTS) {
-        val protected = setOf(PLP_TEMP_NAME, SOURCE_TEMP_NAME, SOURCE_TEMP_WORK)
+        val protected = setOf(
+            PLP_TEMP_NAME,
+            SOURCE_TEMP_NAME,
+            SOURCE_TEMP_WORK,
+            SOURCE_TEMP_COPY_NAME,
+            PLP_TEMP_COPY_NAME
+        )
 
         val pdfs = cacheDir
             .listFiles { f -> f.isFile && f.extension.equals("pdf", true) && f.name !in protected }
@@ -5167,7 +5810,151 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun requestRvThumbnailsHeightUpdate() {
+        if (!::binding.isInitialized) return
+
+        val allowUpdateWithoutWindowFocus: Boolean = try {
+            val anyTrackedDialogShowing = plpSizedDialogs.any { it.isShowing }
+
+            val progressShowing = (
+                    binding.overlayProgressDialog.isVisible ||
+                            binding.overlayProgressDialogUpdateUi.isVisible
+                    )
+            val sigPosShowing = (binding.overlayDialogSignaturePosition.isVisible)
+
+            anyTrackedDialogShowing || progressShowing || sigPosShowing
+        } catch (_: Exception) {
+            false
+        }
+
+        if (!hasWindowFocusFlag && !allowUpdateWithoutWindowFocus) {
+            pendingRvUpdate = true
+            return
+        }
+
+        if (isFinishing || isDestroyed) return
+
+        val v = binding.rootScroll
+        if (!v.isAttachedToWindow) return
+
+        v.removeCallbacks(rvHeightUpdateRunnable)
+        v.postDelayed(rvHeightUpdateRunnable, 80)
+    }
+
+    private fun setRvHeightSafely(newHeight: Int) {
+        if (!::binding.isInitialized) return
+        val rv = binding.rvThumbnails
+        val lp = rv.layoutParams ?: return
+        if (lp.height == newHeight) return
+
+        suppressRootScrollLayoutCallback = true
+        lp.height = newHeight
+        rv.layoutParams = lp
+
+        binding.rootScroll.postOnAnimation {
+            suppressRootScrollLayoutCallback = false
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        startFoldableLayoutTracking()
+    }
+
+    private fun startFoldableLayoutTracking() {
+        if (foldableInfoJob != null) return
+
+        foldableInfoJob = lifecycleScope.launch {
+            try {
+                WindowInfoTracker.getOrCreate(this@MainActivity)
+                    .windowLayoutInfo(this@MainActivity)
+                    .collect { info ->
+                        val foldableNow = info.displayFeatures.any { it is FoldingFeature }
+                        isFoldableDevice = isFoldableDevice || foldableNow
+                        requestRvThumbnailsHeightUpdate()
+                    }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun applyRvThumbnailsHeight() {
+        if (!::binding.isInitialized) return
+        if (isFinishing || isDestroyed) return
+
+        val c = resources.configuration
+        val portrait = (c.screenHeightDp >= c.screenWidthDp)
+
+        val shouldFillLikeTabletPortrait =
+            (!isFoldableDevice) && portrait && isTabletLikeDevice
+
+        val minPx = resources.getDimensionPixelSize(R.dimen.dp_420)
+
+        if (!shouldFillLikeTabletPortrait) {
+            setRvHeightSafely(minPx)
+            return
+        }
+
+        binding.rootScroll.post {
+            if (!::binding.isInitialized) return@post
+            if (isFinishing || isDestroyed) return@post
+
+            val rv = binding.rvThumbnails
+            val scroll = binding.rootScroll
+
+            val bottom = bottomPanelView
+
+            val locRv = IntArray(2)
+            val locScroll = IntArray(2)
+            rv.getLocationInWindow(locRv)
+            scroll.getLocationInWindow(locScroll)
+
+            val bottomShown = (bottom != null && bottom.isShown && bottom.height > 0)
+            val reservedForBottomPanel = if (bottomShown) bottom.height else 0
+
+            val extraPaddingBottom = max(0, scroll.paddingBottom - reservedForBottomPanel)
+
+            val scrollBottomInWindow = locScroll[1] + scroll.height - extraPaddingBottom
+
+            var effectiveBottomInWindow = scrollBottomInWindow
+            if (bottomShown) {
+                val locBottom = IntArray(2)
+                bottom.getLocationInWindow(locBottom)
+                effectiveBottomInWindow = min(effectiveBottomInWindow, locBottom[1])
+            }
+
+            val scrollTopInWindow = locScroll[1] + scroll.paddingTop
+            val rvTopInWindow = max(locRv[1], scrollTopInWindow)
+
+            var availablePx = effectiveBottomInWindow - rvTopInWindow
+            if (availablePx < 0) availablePx = 0
+
+            val section = rv.parent as? View
+            val sectionLp = section?.layoutParams as? ViewGroup.MarginLayoutParams
+            if (sectionLp != null && !bottomShown) {
+                availablePx -= sectionLp.bottomMargin
+                if (availablePx < 0) availablePx = 0
+            }
+
+            val targetPx = max(minPx, availablePx)
+            setRvHeightSafely(targetPx)
+        }
+    }
+
     override fun onStop() {
+        try {
+            if (::binding.isInitialized) {
+                binding.rootScroll.removeCallbacks(rvHeightUpdateRunnable)
+            }
+        } catch (_: Exception) { }
+
+        suppressRootScrollLayoutCallback = false
+
+        pendingRvUpdate = false
+        hasWindowFocusFlag = false
+
         try {
             val u = lastGrantedViewUri
             if (u != null) {
@@ -5176,6 +5963,8 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
         lastGrantedViewUri = null
         lastGrantedPkg = null
+        foldableInfoJob?.cancel()
+        foldableInfoJob = null
 
         super.onStop()
     }
@@ -5194,6 +5983,20 @@ class MainActivity : AppCompatActivity() {
             )
             true
         } catch (_: Exception) { false }
+
+    private fun cleanupCacheExceptTemps() {
+        val keep = setOf(SOURCE_TEMP_NAME, PLP_TEMP_NAME)
+        cacheDir.listFiles()?.forEach { f ->
+            if (f.name !in keep) {
+                runCatching { f.deleteRecursively() }
+            }
+        }
+    }
+
+    private fun scheduleCacheCleanupAfterExternalReturn() {
+        pendingCacheCleanupAfterExternalReturn = true
+        didPauseForExternalAction = false
+    }
 
     private fun openPdfWithDriveOrOther() {
         showInProgress(getString(R.string.in_progress_pdf_reading))
@@ -5227,7 +6030,9 @@ class MainActivity : AppCompatActivity() {
                     if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
                         runCatching {
                             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                            prefs.getBoolean(KEY_LAST_INNER_PDF_READER, true)
+                            synchronized(prefsBackupLock) {
+                                prefs.getBoolean(KEY_LAST_INNER_PDF_READER, true)
+                            }
                         }.getOrDefault(true)
                     } else {
                         false
@@ -5240,6 +6045,7 @@ class MainActivity : AppCompatActivity() {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         startActivity(i)
+                        scheduleCacheCleanupAfterExternalReturn()
                         return@launch
                     } catch (_: Exception) {
                     }
@@ -5276,6 +6082,7 @@ class MainActivity : AppCompatActivity() {
                     val old = StrictMode.allowThreadDiskReads()
                     try {
                         startActivity(chooser)
+                        scheduleCacheCleanupAfterExternalReturn()
                     } finally {
                         StrictMode.setThreadPolicy(old)
                     }
@@ -5302,6 +6109,7 @@ class MainActivity : AppCompatActivity() {
                     val old = StrictMode.allowThreadDiskReads()
                     try {
                         startActivity(Intent.createChooser(baseViewIntent, chooserTitle))
+                        scheduleCacheCleanupAfterExternalReturn()
                     } catch (_: Exception) {
                         Toast.makeText(this@MainActivity, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
                     } finally {
@@ -5364,6 +6172,7 @@ class MainActivity : AppCompatActivity() {
 
                 val adapter = PdfDocumentAdapter(namedPath, namedName)
                 printManager.print(namedName, adapter, PrintAttributes.Builder().build())
+                scheduleCacheCleanupAfterExternalReturn()
 
             } catch (e: CancellationException) {
                 throw e
@@ -5382,8 +6191,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveNupPdf() {
-        showInProgress(getString(R.string.in_progress_save))
-        lockScreenOrientation()
+
+        val needsOutputPassword = passwordOutCb.isChecked
+        if (!needsOutputPassword) {
+            showInProgress(getString(R.string.in_progress_save))
+            lockScreenOrientation()
+        }
 
         val backupJob = lifecycleScope.launch {
             backupSelectionState()
@@ -5393,13 +6206,15 @@ class MainActivity : AppCompatActivity() {
 
         val job = lifecycleScope.launch {
             try {
-                val outputPasswordBytes: ByteArray? = if (passwordOutCb.isChecked) {
+                val outputPasswordBytes: ByteArray? = if (needsOutputPassword) {
                     val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
                     if (pw == null) {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
                         return@launch
                     }
+
+                    showInProgress(getString(R.string.in_progress_save))
+                    lockScreenOrientation()
+
                     pw
                 } else null
 
@@ -5450,8 +6265,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shareNupPdf() {
-        showInProgress(getString(R.string.in_progress_send))
-        lockScreenOrientation()
+
+        val needsOutputPassword = passwordOutCb.isChecked
+        if (!needsOutputPassword) {
+            showInProgress(getString(R.string.in_progress_send))
+            lockScreenOrientation()
+        }
 
         val backupJob = lifecycleScope.launch {
             backupSelectionState()
@@ -5461,13 +6280,15 @@ class MainActivity : AppCompatActivity() {
 
         val job = lifecycleScope.launch {
             try {
-                val outputPasswordBytes: ByteArray? = if (passwordOutCb.isChecked) {
+                val outputPasswordBytes: ByteArray? = if (needsOutputPassword) {
                     val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
                     if (pw == null) {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
                         return@launch
                     }
+
+                    showInProgress(getString(R.string.in_progress_send))
+                    lockScreenOrientation()
+
                     pw
                 } else null
 
@@ -5512,58 +6333,101 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun promptForPasswordForOutput(titleResId: Int, errorHintResId: Int? = null): String? =
         suspendCancellableCoroutine { cont ->
-            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
-            val dialog = MaterialAlertDialogBuilder(this)
-                .setView(dialogView)
-                .create()
+
+            PdfProcessingForegroundService.stop(this@MainActivity)
+            unlockScreenOrientation()
+
+            applySoftInputModeForPasswordOverlay()
+
+            val overlay = binding.overlayDialogPassword
+            val panel = binding.overlayDialogPasswordPanel
+
+            panel.removeAllViews()
+            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password, panel, false)
+            panel.addView(dialogView)
+
+            overlay.visibility = View.VISIBLE
+
+            overlay.bringToFront()
+
+            overlay.setOnClickListener {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+                restoreSoftInputModeAfterPasswordOverlay()
+                if (!cont.isCompleted) cont.resume(null)
+            }
+            panel.setOnClickListener {
+            }
 
             (dialogView as? ViewGroup)?.let { vg ->
                 (vg.getChildAt(0) as? TextView)?.setText(titleResId)
             }
 
-            val listView = dialogView.findViewById<ListView>(R.id.listView)
-            val parent = listView.parent as ViewGroup
-            val indexInParent = parent.indexOfChild(listView)
-            val lp = listView.layoutParams
-
             val et = setupPasswordInputForDialog(
-                dialog = dialog,
                 dialogView = dialogView,
-                parent = parent,
-                indexInParent = indexInParent,
-                lp = lp,
                 showError = (errorHintResId != null),
                 errorHintResId = errorHintResId
             )
 
-            val btnNew    = dialogView.findViewById<Button>(R.id.btn_new)
-            val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-            val btnOk     = dialogView.findViewById<Button>(R.id.btn_ok)
-            val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-
-            btnNew.visibility = View.GONE
-            btnRemove.visibility = View.GONE
+            val btnOk     = dialogView.findViewById<Button>(R.id.pwd_ok)
+            val btnCancel = dialogView.findViewById<Button>(R.id.pwd_cancel)
 
             btnOk.setOnClickListener {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
                 val pwd = et.text?.toString()?.trim().orEmpty()
-                dialog.dismiss()
+
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+
+                restoreSoftInputModeAfterPasswordOverlay()
+
                 if (!cont.isCompleted) cont.resume(pwd)
             }
 
             btnCancel.setOnClickListener {
-                dialog.dismiss()
-                if (!cont.isCompleted) cont.resume(null)
-            }
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
 
-            dialog.setOnCancelListener {
+                overlay.visibility = View.GONE
+                overlay.setOnClickListener(null)
+
+                restoreSoftInputModeAfterPasswordOverlay()
+
                 if (!cont.isCompleted) cont.resume(null)
             }
 
             cont.invokeOnCancellation {
-                if (dialog.isShowing) dialog.dismiss()
+                runCatching {
+                    val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                    val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                    runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+
+                    overlay.visibility = View.GONE
+                    overlay.setOnClickListener(null)
+
+                    restoreSoftInputModeAfterPasswordOverlay()
+                }.onFailure {
+                }
             }
 
-            dialog.show()
+            runCatching {
+                et.requestFocus()
+            }.onFailure {
+            }
+
+            et.post {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                val token = currentFocus?.windowToken ?: runCatching { overlay.windowToken }.getOrNull()
+                runCatching { imm?.hideSoftInputFromWindow(token, 0) }
+            }
         }
 
     private suspend fun getConfirmedOutputPasswordOrNull(): ByteArray? {
@@ -5922,7 +6786,7 @@ class MainActivity : AppCompatActivity() {
 
                                                         EventType.RENDER_PATH -> {
                                                             val pri = data as PathRenderInfo
-                                                            
+
                                                             if (pri.operation == PathRenderInfo.NO_OP) return
 
                                                             val path = pri.path
@@ -5952,7 +6816,7 @@ class MainActivity : AppCompatActivity() {
 
                                             PdfCanvasProcessor(listenerNoOpFiltered).processPageContent(sp)
                                             val box2 = listenerNoOpFiltered.getBounds()
-                                            
+
                                             if (box2 != null) {
                                                 val shrinkW = box2.width < box.width - 2f
                                                 val shrinkH = box2.height < box.height - 2f
@@ -6190,16 +7054,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("RtlHardcoded")
     private fun showTimestampDialog() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .create()
 
-        (dialogView.findViewById<View>(R.id.signature_popup_title) as? TextView)
-            ?.setText(R.string.add_timestamp)
+        val overlay = binding.overlayDialogTimestamp
+        val panel = binding.overlayDialogTimestampPanel
 
-        val listView = dialogView.findViewById<ListView>(R.id.listView)
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_timestamp, panel, false)
+        panel.addView(dialogView)
+
+        overlay.visibility = View.VISIBLE
+
+        overlay.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
+        panel.setOnClickListener {
+        }
+
+        val listView = dialogView.findViewById<ListView>(R.id.dts_listview)
         listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
 
         val options = listOf(
@@ -6226,7 +7100,6 @@ class MainActivity : AppCompatActivity() {
                 override fun getItem(position: Int): Any = labels[position]
                 override fun getItemId(position: Int): Long = position.toLong()
 
-                @SuppressLint("RtlHardcoded")
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                     val row = if (convertView == null) {
                         val container = LinearLayout(parent.context).apply {
@@ -6290,13 +7163,8 @@ class MainActivity : AppCompatActivity() {
             listView.adapter = adapter
         }
 
-        val btnNew    = dialogView.findViewById<Button>(R.id.btn_new)
-        val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-        val btnOk     = dialogView.findViewById<Button>(R.id.btn_ok)
-        val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-
-        btnNew?.visibility = View.GONE
-        btnRemove?.visibility = View.GONE
+        val btnOk     = dialogView.findViewById<Button>(R.id.dts_btn_ok)
+        val btnCancel = dialogView.findViewById<Button>(R.id.dts_btn_cancel)
 
         val fileNameEt: EditText = findViewById(R.id.file_name)
 
@@ -6312,13 +7180,15 @@ class MainActivity : AppCompatActivity() {
                 fileNameEt.text = editable
                 fileNameEt.setSelection((start + insert.length).coerceAtMost(editable.length))
             }
-            dialog.dismiss()
+
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
         }
 
-        btnCancel?.setOnClickListener { dialog.dismiss() }
-
-        dialog.setCanceledOnTouchOutside(true)
-        dialog.show()
+        btnCancel?.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
     }
 
     private fun buildOutputFileName(): String {
@@ -6415,8 +7285,10 @@ class MainActivity : AppCompatActivity() {
             }
             try {
                 startActivity(chooser)
+                scheduleCacheCleanupAfterExternalReturn()
             } catch (_: Exception) {
                 Toast.makeText(this, getString(R.string.no_app_can_share_pdf), Toast.LENGTH_LONG).show()
+                lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
             }
         } else {
             val resolves = pm.queryIntentActivities(sendIntent, 0)
@@ -6434,8 +7306,10 @@ class MainActivity : AppCompatActivity() {
 
             try {
                 startActivity(Intent.createChooser(sendIntent, chooserTitle))
+                scheduleCacheCleanupAfterExternalReturn()
             } catch (_: Exception) {
                 Toast.makeText(this, getString(R.string.no_app_can_share_pdf), Toast.LENGTH_LONG).show()
+                lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
             } finally {
                 Handler(Looper.getMainLooper()).postDelayed({
                     ownComponents.forEach { comp ->
@@ -6470,6 +7344,8 @@ class MainActivity : AppCompatActivity() {
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
         val job = lifecycleScope.launch(Dispatchers.IO) {
+            var handedOffToNupRebuild = false
+
             val isLand = landscape.isChecked
             val a4Wmm = if (isLand) 297f else 210f
             val a4Hmm = if (isLand) 210f else 297f
@@ -6728,6 +7604,9 @@ class MainActivity : AppCompatActivity() {
 
                                 if (!bitmapForExport.isRecycled) bitmapForExport.recycle()
                             }
+
+                            yield()
+                            delay(5L)
                         }
                     }
                 }
@@ -6807,7 +7686,8 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                updateSourceWithSignedGroups(signedList){
+                handedOffToNupRebuild = true
+                updateSourceWithSignedGroups(signedList) {
                     hideInProgressIfShown()
                     unlockScreenOrientation()
                 }
@@ -6824,7 +7704,10 @@ class MainActivity : AppCompatActivity() {
                 tmpSigned.values.forEach { runCatching { it.delete() } }
                 withContext(Dispatchers.Main) {
                     if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
-                    unlockScreenOrientation()
+
+                    if (!handedOffToNupRebuild) {
+                        unlockScreenOrientation()
+                    }
                 }
             }
         }
@@ -6948,7 +7831,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleNupRebuild(onReloadStarted: (() -> Unit)? = null) {
         runCatching {
-            if (::progressDialog.isInitialized && progressDialog.isShowing) {
+
+            if (::binding.isInitialized && (
+                        binding.overlayProgressDialog.isVisible ||
+                                binding.overlayProgressDialogUpdateUi.isVisible
+                        )
+            ) {
                 lockScreenOrientation()
             }
         }.onFailure {
@@ -6962,22 +7850,15 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     resetThumbDocKey("nup_rebuilt_${System.currentTimeMillis()}")
 
-                    var unlockedFromOnStarted = false
-
                     reloadThumbnailsFromPlp(
                         releaseUiAtStart = false,
                         onStarted = {
                             unlockScreenOrientation()
-                            unlockedFromOnStarted = true
                             onReloadStarted?.invoke()
                         }
                     )
 
                     updateButtonsState()
-
-                    if (!unlockedFromOnStarted) {
-                        unlockScreenOrientation()
-                    }
                 }
             }
         }
@@ -7001,17 +7882,25 @@ class MainActivity : AppCompatActivity() {
         suppressNup = false
         runCatching { snapshotInitialPrefsIfNeeded() }
 
-        if (::progressDialog.isInitialized && progressDialog.isShowing) {
-            var indicator = progressDialog.findViewById<BaseProgressIndicator<*>>(R.id.progress_bar_indicator)
+        runCatching {
+            val showing = (
+                    binding.overlayProgressDialog.isVisible ||
+                            binding.overlayProgressDialogUpdateUi.isVisible
+                    )
 
-            if (indicator == null) {
-                indicator = progressDialog.findViewById(R.id.progress_bar_indicator_update_ui)
-            }
+            if (showing) {
+                var indicator = binding.overlayProgressDialogPanel.findViewById<BaseProgressIndicator<*>>(R.id.progress_bar_indicator)
 
-            indicator?.post {
-                indicator.hide()
-                indicator.show()
+                if (indicator == null) {
+                    indicator = binding.overlayProgressDialogUpdateUiPanel.findViewById(R.id.progress_bar_indicator_update_ui)
+                }
+
+                indicator?.post {
+                    indicator.hide()
+                    indicator.show()
+                }
             }
+        }.onFailure {
         }
 
         if (Build.VERSION.SDK_INT <= VERSION_CODES.N_MR1 && !didRunNScrollColdStartFix && isFirstCreate) {
@@ -7045,6 +7934,14 @@ class MainActivity : AppCompatActivity() {
                 sv.requestFocusFromTouch()
             }
         }
+
+        if (pendingCacheCleanupAfterExternalReturn && didPauseForExternalAction) {
+            pendingCacheCleanupAfterExternalReturn = false
+            didPauseForExternalAction = false
+            lifecycleScope.launch(Dispatchers.IO) {
+                cleanupCacheExceptTemps()
+            }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -7056,7 +7953,9 @@ class MainActivity : AppCompatActivity() {
             val item = menu.findItem(R.id.action_inner_pdf_reader)
             if (item != null) {
                 val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                val enabled = prefs.getBoolean(KEY_LAST_INNER_PDF_READER, true)
+                val enabled = synchronized(prefsBackupLock) {
+                    prefs.getBoolean(KEY_LAST_INNER_PDF_READER, true)
+                }
                 item.isCheckable = true
                 item.isChecked = enabled
                 item.isEnabled = Build.VERSION.SDK_INT >= VERSION_CODES.S
@@ -7075,8 +7974,10 @@ class MainActivity : AppCompatActivity() {
             R.id.action_inner_pdf_reader -> {
                 val newChecked = !item.isChecked
                 item.isChecked = newChecked
-                getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                    .edit { putBoolean(KEY_LAST_INNER_PDF_READER, newChecked) }
+                synchronized(prefsBackupLock) {
+                    getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                        .edit { putBoolean(KEY_LAST_INNER_PDF_READER, newChecked) }
+                }
                 true
             }
 
@@ -7100,47 +8001,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchBatteryOptimizationSettings() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_signature_chooser, null)
 
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .create()
+        val overlay = binding.overlayDialogBatteryOptimization
+        val panel = binding.overlayDialogBatteryOptimizationPanel
 
-        dialogView.findViewById<TextView>(R.id.signature_popup_title)
-            ?.setText(R.string.battery_optimization)
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_battery_optimization, panel, false)
+        panel.addView(dialogView)
 
-        dialogView.findViewById<ListView>(R.id.listView)?.visibility = View.GONE
+        overlay.visibility = View.VISIBLE
 
-        (dialogView as? LinearLayout)?.let { rootLayout ->
-            val horizontalMargin = resources.getDimensionPixelSize(R.dimen.dp_16)
-
-            val messageView = MaterialTextView(this).apply {
-                text = getString(R.string.battery_optimization_text)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(horizontalMargin, 0, horizontalMargin, 0)
-                }
-            }
-
-            rootLayout.addView(messageView, 1)
+        overlay.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
+        panel.setOnClickListener {
         }
 
-        val btnNew    = dialogView.findViewById<Button>(R.id.btn_new)
-        val btnRemove = dialogView.findViewById<Button>(R.id.btn_remove)
-        val btnOk     = dialogView.findViewById<Button>(R.id.btn_ok)
-        val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-
-        btnNew?.visibility = View.GONE
-        btnRemove?.visibility = View.GONE
+        val btnOk     = dialogView.findViewById<Button>(R.id.bo_btn_ok)
+        val btnCancel = dialogView.findViewById<Button>(R.id.bo_btn_cancel)
 
         btnCancel?.setOnClickListener {
-            dialog.dismiss()
+
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
         }
 
         btnOk?.setOnClickListener {
-            dialog.dismiss()
+
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+
             try {
                 val intent = Intent(
                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -7151,9 +8042,6 @@ class MainActivity : AppCompatActivity() {
 
             }
         }
-
-        dialog.setCanceledOnTouchOutside(true)
-        dialog.show()
     }
 
     private fun launchSaveSharedPreferences() {
@@ -7192,7 +8080,9 @@ class MainActivity : AppCompatActivity() {
         serializer.startTag(null, "preferences")
 
         fun writeMap(name: String) {
-            val all = getSharedPreferences(name, MODE_PRIVATE).all
+            val all = synchronized(prefsBackupLock) {
+                getSharedPreferences(name, MODE_PRIVATE).all
+            }
             serializer.startTag(null, "map")
             serializer.attribute(null, "name", name)
 
@@ -7292,7 +8182,9 @@ class MainActivity : AppCompatActivity() {
                             inTargetMap = (nameAttr == PREFS_NAME_FRAGMENT)
                             if (inTargetMap) {
                                 foundTargetMap = true
-                                editor = spFragment.edit()
+                                synchronized(prefsBackupLock) {
+                                    editor = spFragment.edit()
+                                }
                             }
                         }
                         "entry" -> {
@@ -7353,7 +8245,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (foundTargetMap) {
-            editor?.apply()
+            synchronized(prefsBackupLock) {
+                editor?.apply()
+            }
         } else {
             throw IllegalArgumentException(getString(R.string.error_invalid_prefs_file, PREFS_NAME_FRAGMENT))
         }
@@ -7361,7 +8255,9 @@ class MainActivity : AppCompatActivity() {
 
     fun setThemeMode(mode: String) {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-        prefs.edit { putString(KEY_THEME_MODE, mode) }
+        synchronized(prefsBackupLock) {
+            prefs.edit { putString(KEY_THEME_MODE, mode) }
+        }
 
         val nightMode = when (mode) {
             "light" -> AppCompatDelegate.MODE_NIGHT_NO
@@ -7381,18 +8277,26 @@ class MainActivity : AppCompatActivity() {
             val nsv = findViewById<NestedScrollView>(R.id.root_scroll)
             val nsvY = nsv?.scrollY ?: -1
 
+            val csv = selectedIdx.joinToString(",")
+            val rotationCsv = sourceRotation.joinToString(",")
+
             val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            sp.edit {
-                putInt(KEY_THEME_RESTORE_FIRST, first)
-                putInt(KEY_THEME_RESTORE_OFFSET, offset)
-                putString(KEY_THEME_RESTORE_SELECTED_CSV, selectedIdx.joinToString(","))
-                putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
+            synchronized(prefsBackupLock) {
+                sp.edit {
+                    putInt(KEY_THEME_RESTORE_FIRST, first)
+                    putInt(KEY_THEME_RESTORE_OFFSET, offset)
+                    putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
+                    putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
+                    putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
+                }
             }
         }
 
         runCatching {
             val sp2 = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            sp2.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true) }
+            synchronized(prefsBackupLock) {
+                sp2.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true) }
+            }
         }.onFailure {
 
         }

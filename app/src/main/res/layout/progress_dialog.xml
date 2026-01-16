@@ -1,30 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="center"
-    android:orientation="vertical"
     android:padding="@dimen/dp_16"
     tools:ignore="SpUsage, RtlHardcoded">
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/progress_bar_simple_text"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:textSize="@dimen/dp_14"
         android:textColor="@color/progress_info_text_color"
         android:gravity="center"
         android:textAlignment="center"
-        android:layout_marginBottom="@dimen/dp_16" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent" />
 
     <com.google.android.material.progressindicator.LinearProgressIndicator
         android:id="@+id/progress_bar_indicator"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:indeterminate="true"
-        app:trackThickness="@dimen/dp_4" />
+        app:trackThickness="@dimen/dp_4"
+        android:layout_marginTop="@dimen/dp_16"
+        app:layout_constrainedHeight="true"
+        app:layout_constraintTop_toBottomOf="@id/progress_bar_simple_text"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/progress_bar_cancel"
@@ -32,5 +38,9 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="@dimen/dp_16"
-        android:text="@string/cancel_text" />
-</LinearLayout>
+        android:text="@string/cancel_text"
+        app:layout_constraintTop_toBottomOf="@id/progress_bar_indicator"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent" />
+</androidx.constraintlayout.widget.ConstraintLayout>
