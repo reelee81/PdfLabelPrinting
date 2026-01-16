@@ -684,7 +684,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:background="@drawable/bg_overlay_dialog_panel"
+            android:background="@drawable/bg_overlay_signature_position_dialog_panel"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
             app:layout_constraintTop_toTopOf="parent"
