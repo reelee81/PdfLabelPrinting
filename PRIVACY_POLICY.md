@@ -1,7 +1,7 @@
-Privacy Policy – PdfLabelPrinting
+Privacy Policy – PdfLabelPrinting (Pdf Label Printing app)
 
-The PdfLabelPrinting application does not collect, store, or transmit any personal data to a server.
-The application only processes PDF files selected by the user and generates printable labels from them.
+The Pdf Label Printing (PdfLabelPrinting) application does not collect, store, or transmit any personal data to a server.
+It only processes PDF files selected by the user and generates printable labels from them.
 File handling and the insertion of signatures take place entirely on the user’s device.
 
 The application:

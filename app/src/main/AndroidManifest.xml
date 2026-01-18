@@ -61,7 +61,7 @@
 
         <activity
             android:name="hu.reelee81.pdflabelprinting.MainActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode|locale|fontScale|fontWeightAdjustment|colorMode|keyboard|navigation|touchscreen|layoutDirection|mcc|mnc|grammaticalGender"
             android:windowSoftInputMode="stateHidden|adjustResize"
             android:exported="true"
             android:launchMode="singleTask"

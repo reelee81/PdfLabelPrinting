@@ -116,7 +116,6 @@ import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.EncryptionConstants
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfReader
-import com.itextpdf.kernel.pdf.PdfVersion
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.ReaderProperties
 import com.itextpdf.kernel.pdf.WriterProperties
@@ -143,7 +142,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.Date
 import java.util.Locale
 import java.util.WeakHashMap
-import java.util.zip.Deflater
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.math.abs
@@ -312,6 +310,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingCacheCleanupAfterExternalReturn = false
     private var didPauseForExternalAction = false
     private var orientationLockPrevRequested: Int? = null
+    private var uiModeRecreateScheduled: Boolean = false
+    private var lastConfigSnapshotForDiff: Configuration? = null
 
     @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
@@ -1077,8 +1077,15 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleUiModeRecreate() {
         if (isFinishing || isDestroyed) return
 
+        if (uiModeRecreateScheduled) return
+        uiModeRecreateScheduled = true
+
         window.decorView.post {
-            if (isFinishing || isDestroyed) return@post
+            uiModeRecreateScheduled = false
+
+            if (isFinishing || isDestroyed) {
+                return@post
+            }
             recreate()
         }
     }
@@ -1132,6 +1139,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
+        val prevConfig = lastConfigSnapshotForDiff?.let { Configuration(it) } ?: Configuration(newConfig)
+        lastConfigSnapshotForDiff = Configuration(newConfig)
+
         super.onConfigurationChanged(newConfig)
 
         recomputeTabletLikeFlag()
@@ -1141,6 +1151,37 @@ class MainActivity : AppCompatActivity() {
         fastScroller?.refreshDisplayMetrics()
 
         requestRvThumbnailsHeightUpdate()
+
+        val localeChanged = prevConfig.locales != newConfig.locales
+        val fontScaleChanged = prevConfig.fontScale != newConfig.fontScale
+        val layoutDirectionChanged = prevConfig.layoutDirection != newConfig.layoutDirection
+        val keyboardChanged = prevConfig.keyboard != newConfig.keyboard
+        val navigationChanged = prevConfig.navigation != newConfig.navigation
+        val touchscreenChanged = prevConfig.touchscreen != newConfig.touchscreen
+        val colorModeChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.O) {
+            prevConfig.colorMode != newConfig.colorMode
+        } else false
+        val fontWeightAdjustmentChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
+            prevConfig.fontWeightAdjustment != newConfig.fontWeightAdjustment
+        } else false
+        val mccChanged = prevConfig.mcc != newConfig.mcc
+        val mncChanged = prevConfig.mnc != newConfig.mnc
+        val grammaticalGenderChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            prevConfig.grammaticalGender != newConfig.grammaticalGender
+        } else false
+
+        val nonUiModeConfigChangeNeedsRecreate =
+            localeChanged ||
+                    fontScaleChanged ||
+                    layoutDirectionChanged ||
+                    keyboardChanged ||
+                    navigationChanged ||
+                    touchscreenChanged ||
+                    colorModeChanged ||
+                    fontWeightAdjustmentChanged ||
+                    mccChanged ||
+                    mncChanged ||
+                    grammaticalGenderChanged
 
         val prevNightMask = lastNightMask
         val nightMask = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
@@ -1153,16 +1194,43 @@ class MainActivity : AppCompatActivity() {
                     rerender.invoke()
                 }
             }
+
+            if (nonUiModeConfigChangeNeedsRecreate) {
+                if (isUiBlockedByProgress || orientationLockPrevRequested != null) {
+                    pendingUiModeRecreate = true
+                } else {
+                    scheduleUiModeRecreate()
+                }
+            }
+
             return
         }
 
         if (prevNightMask < 0) {
             lastNightMask = nightMask
+
+            if (nonUiModeConfigChangeNeedsRecreate) {
+                if (isUiBlockedByProgress || orientationLockPrevRequested != null) {
+                    pendingUiModeRecreate = true
+                } else {
+                    scheduleUiModeRecreate()
+                }
+            }
+
             return
         }
 
         if (prevNightMask == Configuration.UI_MODE_NIGHT_UNDEFINED) {
             lastNightMask = nightMask
+
+            if (nonUiModeConfigChangeNeedsRecreate) {
+                if (isUiBlockedByProgress || orientationLockPrevRequested != null) {
+                    pendingUiModeRecreate = true
+                } else {
+                    scheduleUiModeRecreate()
+                }
+            }
+
             return
         }
 
@@ -1195,6 +1263,14 @@ class MainActivity : AppCompatActivity() {
             if (::binding.isInitialized && binding.overlayDialogSignaturePosition.isVisible && rerender != null) {
                 binding.root.post {
                     rerender.invoke()
+                }
+            }
+
+            if (nonUiModeConfigChangeNeedsRecreate) {
+                if (isUiBlockedByProgress || orientationLockPrevRequested != null) {
+                    pendingUiModeRecreate = true
+                } else {
+                    scheduleUiModeRecreate()
                 }
             }
         }
@@ -4524,7 +4600,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun writerProps(): WriterProperties =
-        WriterProperties().setFullCompressionMode(true).setCompressionLevel(CompressionConstants.BEST_SPEED)
+        WriterProperties()
+            .setFullCompressionMode(true)
+            .setCompressionLevel(CompressionConstants.BEST_SPEED)
 
     private fun rdr(path: String, password: ByteArray? = null): PdfReader =
         PdfReader(
@@ -5858,6 +5936,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+
+        lastConfigSnapshotForDiff = Configuration(resources.configuration)
+
         startFoldableLayoutTracking()
     }
 
@@ -7445,9 +7526,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             val writerProps = writerProps()
-                .setPdfVersion(PdfVersion.PDF_2_0)
                 .setFullCompressionMode(true)
-                .setCompressionLevel(Deflater.BEST_COMPRESSION)
+                .setCompressionLevel(CompressionConstants.BEST_COMPRESSION)
 
             val tmpSigned = mutableMapOf<Int, File>()
 

@@ -1,4 +1,4 @@
-# PdfLabelPrinting
+# PdfLabelPrinting (Pdf Label Printing app)
 
 Android application for PDF-based label printing.  
 The goal is to quickly print cut-out labels from existing PDF documents (e.g. consignment note, delivery note)
@@ -55,7 +55,7 @@ Typical build commands:
 ./gradlew assembleRelease
 ```
 
-In Android Studio, simply import the project from the `PdfLabelPrinting` directory.
+In Android Studio, simply open the project directory.
 
 
 ## License
