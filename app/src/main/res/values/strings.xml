@@ -96,7 +96,7 @@
     <string name="temporary_pdf_not_found">Temporary PDF not found</string>
     <string name="no_source_pages">No source pages</string>
     <string name="cannot_open_uri">Cannot open %1$s</string>
-    <string name="page_size_cm_by_cm">%.2fcm x %.2fcm</string>
+    <string name="page_size_cm_by_cm">%1$.2fcm x %2$.2fcm</string>
     <string name="pdf_viewer_requires_s_ext_13">The built-in PDF viewer requires Android 12 (S) Extension 13 or higher.</string>
     <string name="file_name_optional">File name is optional</string>
     <string name="enter_value_0_209">Enter a value between 0 and 209 (mm)</string>

@@ -96,7 +96,7 @@
     <string name="temporary_pdf_not_found">Átmeneti PDF nem található</string>
     <string name="no_source_pages">Nincsenek forrásoldalak</string>
     <string name="cannot_open_uri">Nem nyitható meg: %1$s</string>
-    <string name="page_size_cm_by_cm">%.2fcm x %.2fcm</string>
+    <string name="page_size_cm_by_cm">%1$.2fcm x %2$.2fcm</string>
     <string name="pdf_viewer_requires_s_ext_13">A beépített PDF-megjelenítőhöz Android 12 (S) Extension 13 vagy újabb szükséges.</string>
     <string name="file_name_optional">A fájlnév megadása nem kötelező</string>
     <string name="enter_value_0_209">Adj meg 0 és 209 közötti értéket (mm)</string>

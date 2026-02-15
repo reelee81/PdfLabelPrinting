@@ -1430,7 +1430,7 @@ class MainActivity : AppCompatActivity() {
             }
             Intent.ACTION_SEND_MULTIPLE -> {
                 val list = intent.getParcelableArrayListCompat(Intent.EXTRA_STREAM)
-                if (list != null && list.isNotEmpty()) {
+                if (!list.isNullOrEmpty()) {
                     for (u in list) tryCollectIfLikelyPdf(u)
                 } else {
                     val cd = intent.clipData

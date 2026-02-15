@@ -16,7 +16,7 @@ the **Apache License 2.0**:
 - `androidx.core:core-ktx:1.17.0`
 - `androidx.appcompat:appcompat:1.7.1`
 - `com.google.android.material:material:1.13.0`
-- `androidx.activity:activity:1.12.2`
+- `androidx.activity:activity:1.12.4`
 - `androidx.constraintlayout:constraintlayout:2.2.1`
 - `androidx.window:window:1.5.1`
 
@@ -30,7 +30,7 @@ References (examples):
 
 ## PDF viewer (Apache License 2.0)
 
-- `androidx.pdf:pdf-viewer-fragment:1.0.0-alpha12`
+- `androidx.pdf:pdf-viewer-fragment:1.0.0-alpha13`
 
 This PDF viewer fragment is part of AndroidX and is also licensed under
 the Apache License 2.0.
