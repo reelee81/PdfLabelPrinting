@@ -45,8 +45,8 @@ entirely at everyone’s own risk.
 ## Build / development
 
 - Minimum SDK: 24
-- Target / Compile SDK: 36
-- Android Gradle Plugin: 9.0.x
+- Target / Compile SDK: 37
+- Android Gradle Plugin: 9.2.x
 
 Typical build commands:
 

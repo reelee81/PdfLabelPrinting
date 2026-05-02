@@ -7,7 +7,7 @@ plugins {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 fun parseLocalesConfig(file: File): List<String> {
@@ -22,14 +22,14 @@ fun parseLocalesConfig(file: File): List<String> {
 
 android {
     namespace = "hu.reelee81.pdflabelprinting"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 16
-        versionName = "16.0"
+        targetSdk = 37
+        versionCode = 17
+        versionName = "17.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,8 +45,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
         isCoreLibraryDesugaringEnabled = true
     }
 

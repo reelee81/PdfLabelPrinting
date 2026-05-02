@@ -3064,7 +3064,7 @@ class MainActivity : AppCompatActivity() {
                         window?.decorView?.post {
                             try {
                                 val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-                                imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                                imm.showSoftInput(v, 0)
                             } catch (_: Exception) { }
                         }
                     }
