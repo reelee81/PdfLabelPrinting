@@ -15,7 +15,7 @@ the **Apache License 2.0**:
 
 - `androidx.core:core-ktx:1.18.0`
 - `androidx.appcompat:appcompat:1.7.1`
-- `com.google.android.material:material:1.13.0`
+- `com.google.android.material:material:1.14.0`
 - `androidx.activity:activity:1.13.0`
 - `androidx.constraintlayout:constraintlayout:2.2.1`
 - `androidx.window:window:1.5.1`

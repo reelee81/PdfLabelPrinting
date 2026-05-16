@@ -3864,7 +3864,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             resetThumbDocKey("cancelLongRunningWorkAndCleanup")
-            
+
             if (restoredPlpBackup) {
                 val prevSuppressNup = suppressNup
                 runCatching {
