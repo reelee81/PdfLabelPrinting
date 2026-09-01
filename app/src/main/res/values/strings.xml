@@ -126,4 +126,12 @@
     <string name="failed_to_rename_encrypted_pdf">Failed to rename encrypted PDF</string>
     <string name="battery_optimization">Battery optimization</string>
     <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app; otherwise, the system may stop processing when you put the app in the background or lock the screen. Different manufacturers place this setting in different locations, but in general you can find it under Settings → Apps → Manage apps → Pdf Label Printing, then look for “Power usage” or “Battery” options where you can turn it on or off. Even then, it may still happen that the process is paused on some devices because certain manufacturers are very aggressive with battery saving (for example when the screen is locked). Therefore, if you want to be absolutely sure that long operations finish, stay on the app screen, because in that case it keeps the display awake until the processing finishes.</string>
+    <string name="search_pdf">SEARCH</string>
+    <string name="edit_pdf">Edit</string>
+    <string name="save_pdf_edits">Save</string>
+    <string name="pdf_editor_requires_s_ext_18">The PDF editor requires Android 12 (S) Extension 18 or higher.</string>
+    <string name="pdf_edits_save_failed">Saving PDF edits failed: %1$s</string>
+    <string name="no_pdf_edits_to_save">No PDF edits to save</string>
+    <string name="discard_pdf_edits">Discard PDF edits?</string>
+    <string name="discard_text">DISCARD</string>
 </resources>

@@ -221,26 +221,26 @@ class ThumbnailAdapter(
         holder.cbSel.isChecked = item.isSelected
         holder.cbSel.setOnCheckedChangeListener { _, checked ->
             val posNow = holder.bindingAdapterPosition
-            if (posNow != RecyclerView.NO_POSITION && posNow in 0 until items.size) {
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
                 items[posNow].isSelected = checked
                 selectionChanged(posNow, checked)
             }
         }
         holder.btnDelete.setOnClickListener {
             val posNow = holder.bindingAdapterPosition
-            if (posNow != RecyclerView.NO_POSITION && posNow in 0 until items.size) {
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
                 deleteListener(posNow)
             }
         }
         holder.btnRotateLeft.setOnClickListener {
             val posNow = holder.bindingAdapterPosition
-            if (posNow != RecyclerView.NO_POSITION && posNow in 0 until items.size) {
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
                 rotateLeftListener(posNow)
             }
         }
         holder.itemView.setOnClickListener {
             val posNow = holder.bindingAdapterPosition
-            if (posNow != RecyclerView.NO_POSITION && posNow in 0 until items.size) {
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
                 clickListener(posNow)
             }
         }
@@ -355,7 +355,7 @@ class ThumbnailAdapter(
                     holder.iv.post {
                         val posNow = holder.bindingAdapterPosition
                         if (posNow != RecyclerView.NO_POSITION &&
-                            posNow in 0 until items.size &&
+                            posNow in items.indices &&
                             items[posNow] === item &&
                             holder.iv.tag == key &&
                             !bmp.isRecycled

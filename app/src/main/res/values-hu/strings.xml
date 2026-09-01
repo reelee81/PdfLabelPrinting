@@ -126,4 +126,12 @@
     <string name="failed_to_rename_encrypted_pdf">A titkosított PDF átnevezése sikertelen</string>
     <string name="battery_optimization">Akkumulátor optimalizálás</string>
     <string name="battery_optimization_text">A hosszú PDF műveletek (1000+ oldal) miatt érdemes kikapcsolni az akku-optimalizálást az alkalmazásnál, különben a rendszer megállíthatja a feldolgozást, ha háttérbe teszed az appot vagy lezárod a kijelzőt. Különböző gyártóknál más-másféleképpen lehet ezt a beállítást elérni, de általában a Beállítások → Alkalmazások → Alkalmazások kezelése → Pdf Címkenyomtatás → Itt kell keresni az "Energiafogyasztás" vagy a "Akkumulátor" beállítási lehetőségeket, amelyeken belül ki/be kapcsolható. Ennek ellenére is előfordulhat, hogy a folyamat szüneteltetett állapotba kerül, mert egyes gyártók túl agresszívan kezelik az akkumulátor védelmet például lezárt kijelzőnél. Ezért ha biztosra akarsz menni, hogy a hosszú műveletek végigfussanak, maradj az app felületén, mert ilyenkor ébren tartja a kijelzőt a feldolgozási folyamat befejezéséig.</string>
+    <string name="search_pdf">KERESÉS</string>
+    <string name="edit_pdf">Szerkesztés</string>
+    <string name="save_pdf_edits">MENTÉS</string>
+    <string name="pdf_editor_requires_s_ext_18">A PDF-szerkesztőhöz Android 12 (S) Extension 18 vagy újabb szükséges.</string>
+    <string name="pdf_edits_save_failed">A PDF-módosítások mentése sikertelen: %1$s</string>
+    <string name="no_pdf_edits_to_save">Nincs menthető PDF-módosítás</string>
+    <string name="discard_pdf_edits">Eldobod a PDF-módosításokat?</string>
+    <string name="discard_text">ELDOBÁS</string>
 </resources>

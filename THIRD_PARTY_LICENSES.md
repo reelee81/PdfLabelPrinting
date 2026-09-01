@@ -13,11 +13,11 @@ For the full license texts, please refer to the linked pages.
 These libraries are part of AndroidX / Material and are covered by
 the **Apache License 2.0**:
 
-- `androidx.core:core-ktx:1.18.0`
-- `androidx.appcompat:appcompat:1.7.1`
+- `androidx.core:core-ktx:1.19.0`
+- `androidx.appcompat:appcompat:1.8.0`
 - `com.google.android.material:material:1.14.0`
 - `androidx.activity:activity:1.13.0`
-- `androidx.constraintlayout:constraintlayout:2.2.1`
+- `androidx.constraintlayout:constraintlayout:2.2.2`
 - `androidx.window:window:1.5.1`
 
 Many additional transitive AndroidX modules may also be pulled in at build time.
@@ -28,11 +28,12 @@ References (examples):
 - <https://www.apache.org/licenses/LICENSE-2.0>
 
 
-## PDF viewer (Apache License 2.0)
+## PDF viewer and editor (Apache License 2.0)
 
-- `androidx.pdf:pdf-viewer-fragment:1.0.0-alpha18`
+- `androidx.pdf:pdf-viewer-fragment:1.0.0-beta01`
+- `androidx.pdf:pdf-ink:1.0.0-beta01`
 
-This PDF viewer fragment is part of AndroidX and is also licensed under
+These PDF components are part of AndroidX and are also licensed under
 the Apache License 2.0.
 
 Reference: <https://developer.android.com/media/grow/implement-pdf-viewer>
@@ -40,12 +41,12 @@ Reference: <https://developer.android.com/media/grow/implement-pdf-viewer>
 
 ## iText Core for Android (AGPL-3.0)
 
-The app uses **iText Core for Android 9.6.0** via the following modules:
+The app uses **iText Core for Android 9.7.1** via the following modules:
 
-- `com.itextpdf.android:kernel-android:9.6.0`
-- `com.itextpdf.android:layout-android:9.6.0`
-- `com.itextpdf.android:bouncy-castle-adapter-android:9.6.0`
-- `com.itextpdf.android:bouncy-castle-connector-android:9.6.0`
+- `com.itextpdf.android:kernel-android:9.7.1`
+- `com.itextpdf.android:layout-android:9.7.1`
+- `com.itextpdf.android:bouncy-castle-adapter-android:9.7.1`
+- `com.itextpdf.android:bouncy-castle-connector-android:9.7.1`
 
 These libraries are licensed under the **GNU Affero General Public License v3**,
 or can be used under a separate commercial license purchased from iText.

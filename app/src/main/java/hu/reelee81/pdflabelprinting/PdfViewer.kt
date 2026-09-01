@@ -1,6 +1,6 @@
 package hu.reelee81.pdflabelprinting
 
-import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
@@ -8,26 +8,49 @@ import android.os.Bundle
 import android.os.ext.SdkExtensions
 import android.provider.OpenableColumns
 import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
-import androidx.appcompat.view.ContextThemeWrapper
+import androidx.appcompat.widget.AppCompatImageButton
 import androidx.appcompat.widget.Toolbar.LayoutParams
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
-import androidx.pdf.viewer.fragment.PdfViewerFragment
 import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.button.MaterialButton
 
 class PdfViewer : AppCompatActivity() {
 
     companion object {
         const val EXTRA_URI = "pdf_uri"
+        const val EXTRA_OUTPUT_URI = "pdf_output_uri"
         private const val FRAG_TAG = "pdfFragTag"
     }
 
-    @SuppressLint("RtlHardcoded")
+    private var currentUri: Uri? = null
+
+    private val editLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val editedUri = result.data
+                ?.getStringExtra(PdfEditorActivity.EXTRA_OUTPUT_URI)
+                ?.toUri()
+                ?: return@registerForActivityResult
+
+            currentUri = editedUri
+            (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
+                ?.documentUri = editedUri
+
+            findViewById<MaterialToolbar>(R.id.toolbar).title = resolveDisplayName(editedUri)
+            setResult(
+                RESULT_OK,
+                Intent().putExtra(EXTRA_OUTPUT_URI, editedUri.toString())
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -59,6 +82,8 @@ class PdfViewer : AppCompatActivity() {
             return
         }
 
+        currentUri = uri
+
         toolbar.title = resolveDisplayName(uri)
 
         val supportsPdfViewer =
@@ -75,8 +100,8 @@ class PdfViewer : AppCompatActivity() {
             return
         }
 
-        val frag = (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? PdfViewerFragment)
-            ?: PdfViewerFragment().also {
+        val frag = (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
+            ?: ReadOnlyPdfViewerFragment().also {
                 supportFragmentManager.beginTransaction()
                     .replace(R.id.pdfFragContainer, it, FRAG_TAG)
                     .commitNow()
@@ -84,44 +109,73 @@ class PdfViewer : AppCompatActivity() {
 
         frag.documentUri = uri
 
-        run {
-            val ctx = ContextThemeWrapper(
-                this,
-                R.style.PdfLabelPrinting_TextButton
-            )
-            val btn = MaterialButton(ctx, null, 0).apply {
-                icon = AppCompatResources.getDrawable(this@PdfViewer, R.drawable.ic_search_24)
-                iconPadding = 0
-                iconTint = AppCompatResources.getColorStateList(
-                    this@PdfViewer,
-                    R.color.toolbar_navigation_icon_color
-                )
+        addToolbarButtons(toolbar, frag)
+    }
 
-                backgroundTintList = AppCompatResources.getColorStateList(
-                    this@PdfViewer,
-                    android.R.color.transparent
-                )
+    private fun supportsPdfEditing(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 18
 
-                rippleColor = AppCompatResources.getColorStateList(
-                    this@PdfViewer,
-                    android.R.color.transparent
-                )
+    private fun addToolbarButtons(toolbar: MaterialToolbar, frag: ReadOnlyPdfViewerFragment) {
+        val buttonSize = resources.getDimensionPixelSize(R.dimen.dp_32)
+        val oldSearchRightMargin = toolbar.contentInsetStartWithNavigation +
+                resources.getDimensionPixelSize(R.dimen.dp_10)
 
-                text = ""
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                marginEnd = oldSearchRightMargin + resources.getDimensionPixelSize(R.dimen.dp_6)
+            }
+        }
 
-                val s = resources.getDimensionPixelSize(R.dimen.dp_44)
-                layoutParams = LayoutParams(s, s).apply {
-                    gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
-                    rightMargin = toolbar.contentInsetStartWithNavigation + resources.getDimensionPixelSize(R.dimen.dp_10)
-                }
-
+        buttons.addView(
+            createToolbarIconButton(R.drawable.ic_search_24, getString(R.string.search_pdf), buttonSize).apply {
+                (layoutParams as LinearLayout.LayoutParams).marginEnd =
+                    resources.getDimensionPixelSize(R.dimen.dp_4)
                 setOnClickListener {
                     frag.isTextSearchActive = true
                 }
             }
-            toolbar.addView(btn)
+        )
+
+        if (supportsPdfEditing()) {
+            buttons.addView(
+                createToolbarIconButton(R.drawable.ic_edit_24, getString(R.string.edit_pdf), buttonSize).apply {
+                    setOnClickListener {
+                        val editUri = currentUri ?: return@setOnClickListener
+                        editLauncher.launch(
+                            Intent(this@PdfViewer, PdfEditorActivity::class.java).apply {
+                                putExtra(PdfEditorActivity.EXTRA_INPUT_URI, editUri.toString())
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                        )
+                    }
+                }
+            )
         }
+
+        toolbar.addView(buttons)
     }
+
+    private fun createToolbarIconButton(
+        iconRes: Int,
+        description: String,
+        size: Int
+    ): AppCompatImageButton =
+        AppCompatImageButton(this).apply {
+            setImageDrawable(AppCompatResources.getDrawable(this@PdfViewer, iconRes))
+            contentDescription = description
+            imageTintList = AppCompatResources.getColorStateList(this@PdfViewer, R.color.toolbar_navigation_icon_color)
+            background = null
+            scaleType = android.widget.ImageView.ScaleType.CENTER
+            setPadding(0, 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(size, size)
+        }
 
     private fun resolveDisplayName(uri: Uri): String {
         return try {

@@ -28,8 +28,8 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 37
-        versionCode = 18
-        versionName = "18.0"
+        versionCode = 19
+        versionName = "19.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -75,6 +75,7 @@ dependencies {
     implementation(libs.itextpdf.bc.adapter)
     implementation(libs.itextpdf.bc.connector)
     implementation(libs.androidx.pdf.viewer)
+    implementation(libs.androidx.pdf.ink)
     implementation(libs.androidx.window)
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
 }

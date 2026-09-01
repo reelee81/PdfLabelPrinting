@@ -5,7 +5,7 @@
     tools:targetApi="33">
 
     <uses-sdk
-        tools:overrideLibrary="androidx.pdf, androidx.pdf.document.service, androidx.pdf.viewer.fragment" />
+        tools:overrideLibrary="androidx.pdf, androidx.pdf.core, androidx.pdf.ink, androidx.pdf.document.service, androidx.pdf.viewer.fragment" />
 
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -61,7 +61,7 @@
         <activity
             android:name="hu.reelee81.pdflabelprinting.MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode|locale|fontScale|fontWeightAdjustment|colorMode|keyboard|navigation|touchscreen|layoutDirection|mcc|mnc|grammaticalGender"
-            android:windowSoftInputMode="stateHidden|adjustResize"
+            android:windowSoftInputMode="stateHidden|adjustPan"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.PdfLabelPrinting">
@@ -110,6 +110,11 @@
 
         <activity
             android:name="hu.reelee81.pdflabelprinting.PdfViewer"
+            android:exported="false"
+            android:theme="@style/Theme.PdfLabelPrinting.PdfViewer" />
+
+        <activity
+            android:name="hu.reelee81.pdflabelprinting.PdfEditorActivity"
             android:exported="false"
             android:theme="@style/Theme.PdfLabelPrinting.PdfViewer" />
 

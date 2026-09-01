@@ -86,6 +86,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
 import androidx.core.view.isVisible
 import androidx.core.view.MenuCompat
 import androidx.core.widget.NestedScrollView
@@ -149,6 +150,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -243,6 +245,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: ThumbnailAdapter
     private lateinit var timeStamp: String
     private lateinit var pdfPickerLauncher: ActivityResultLauncher<Intent>
+    private lateinit var pdfViewerLauncher: ActivityResultLauncher<Intent>
     private lateinit var progressDialog: AlertDialog
     private lateinit var signaturesDir: File
     private lateinit var signaturePickerLauncher: ActivityResultLauncher<Intent>
@@ -598,6 +601,20 @@ class MainActivity : AppCompatActivity() {
         ) { result ->
             if (result.resultCode == RESULT_OK && result.data != null) {
                 result.data?.data?.let { handlePdfUri(it) }
+            }
+        }
+
+        pdfViewerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val editedUri = result.data
+                ?.getStringExtra(PdfViewer.EXTRA_OUTPUT_URI)
+                ?.toUri()
+
+            if (result.resultCode == RESULT_OK && editedUri != null) {
+                handleEditedPdfFromViewer(editedUri)
+            } else {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    cleanupCacheExceptTemps()
+                }
             }
         }
 
@@ -5814,7 +5831,7 @@ class MainActivity : AppCompatActivity() {
                     resetThumbDocKey("deleteSelected")
 
                     for (i in selectedPlp.asReversed()) {
-                        if (i in 0 until viewModel.pageItems.size) {
+                        if (i in viewModel.pageItems.indices) {
                             val removed = viewModel.pageItems.removeAt(i)
                             removed.thumbnail = null
                             adapter.notifyItemRemoved(i)
@@ -6074,6 +6091,76 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleEditedPdfFromViewer(uri: Uri) {
+        showInProgressUpdateUI(getString(R.string.in_progress_ui))
+        lockScreenOrientation()
+
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val job = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val work = File(cacheDir, "${PLP_TEMP_NAME}.edited")
+                if (work.exists()) work.delete()
+
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(work).use { output ->
+                        input.copyTo(output)
+                        output.flush()
+                    }
+                } ?: throw IOException(getString(R.string.input_stream_is_null))
+
+                PdfDocument(rdr(work.absolutePath)).use { }
+
+                val target = plpTempFile()
+                if (target.exists()) target.delete()
+                if (!work.renameTo(target)) {
+                    FileInputStream(work).use { input ->
+                        FileOutputStream(target).use { output ->
+                            input.copyTo(output)
+                            output.flush()
+                        }
+                    }
+                    work.delete()
+                }
+
+                cleanupCacheExceptTemps()
+
+                withContext(Dispatchers.Main) {
+                    resetThumbDocKey("pdfViewerEdit")
+                    reloadThumbnailsFromPlp(
+                        targetIndex = null,
+                        targetOffsetPx = 0,
+                        restorePrevious = true,
+                        releaseUiAtStart = false,
+                        onStarted = {
+                            hideInProgressIfShownUpdateUI()
+                            unlockScreenOrientation()
+                        }
+                    )
+                    updateButtonsState()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
+                    hideInProgressIfShownUpdateUI()
+                    unlockScreenOrientation()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    unlockScreenOrientation()
+                }
+            }
+        }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
+    }
+
     private fun scheduleCacheCleanupAfterExternalReturn() {
         pendingCacheCleanupAfterExternalReturn = true
         didPauseForExternalAction = false
@@ -6125,8 +6212,7 @@ class MainActivity : AppCompatActivity() {
                             putExtra(PdfViewer.EXTRA_URI, uri.toString())
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
-                        startActivity(i)
-                        scheduleCacheCleanupAfterExternalReturn()
+                        pdfViewerLauncher.launch(i)
                         return@launch
                     } catch (_: Exception) {
                     }
@@ -7686,7 +7772,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             yield()
-                            delay(5L)
+                            delay(5L.milliseconds)
                         }
                     }
                 }
