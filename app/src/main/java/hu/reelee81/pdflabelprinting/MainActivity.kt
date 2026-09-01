@@ -1658,6 +1658,29 @@ class MainActivity : AppCompatActivity() {
         job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
+    private fun isTouchInsideView(ev: MotionEvent, view: View): Boolean {
+        val location = IntArray(2)
+        view.getLocationInWindow(location)
+
+        val left = location[0].toFloat()
+        val top = location[1].toFloat()
+        val right = left + view.width
+        val bottom = top + view.height
+
+        if (ev.x in left..<right && ev.y in top..<bottom) {
+            return true
+        }
+
+        view.getLocationOnScreen(location)
+
+        val screenLeft = location[0].toFloat()
+        val screenTop = location[1].toFloat()
+        val screenRight = screenLeft + view.width
+        val screenBottom = screenTop + view.height
+
+        return ev.rawX in screenLeft..<screenRight && ev.rawY in screenTop..<screenBottom
+    }
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (::binding.isInitialized && binding.overlayDialogPassword.isVisible) {
             return super.dispatchTouchEvent(ev)
@@ -1676,9 +1699,7 @@ class MainActivity : AppCompatActivity() {
                     R.id.file_name
                 )
                 if (view.id in blockingIds) {
-                    val outRect = Rect()
-                    view.getGlobalVisibleRect(outRect)
-                    if (!outRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    if (!isTouchInsideView(ev, view)) {
                         view.clearFocus()
 
                         run {
@@ -1712,9 +1733,7 @@ class MainActivity : AppCompatActivity() {
         if (ev.action == MotionEvent.ACTION_UP) {
             currentFocus?.let { focusedView ->
                 if (focusedView is EditText) {
-                    val outRect = Rect()
-                    focusedView.getGlobalVisibleRect(outRect)
-                    if (!outRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    if (!isTouchInsideView(ev, focusedView)) {
                         shouldHideKeyboard = true
                         targetWindowToken = focusedView.windowToken
                         focusedBefore = focusedView
