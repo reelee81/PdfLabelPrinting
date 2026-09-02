@@ -28,8 +28,8 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 37
-        versionCode = 21
-        versionName = "21.0"
+        versionCode = 22
+        versionName = "22.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -175,8 +175,7 @@ class PdfEditorActivity : AppCompatActivity() {
                     Intent().putExtra(EXTRA_OUTPUT_URI, outUri.toString())
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 )
-                fragment.isEditModeEnabled = false
-                finish()
+                finishEditor()
             } catch (e: Exception) {
                 saving = false
                 saveButton?.isEnabled = true
@@ -239,7 +238,7 @@ class PdfEditorActivity : AppCompatActivity() {
         if (::fragment.isInitialized && fragment.hasUnsavedChanges) {
             showDiscardConfirmation()
         } else {
-            finish()
+            finishEditor()
         }
     }
 
@@ -254,7 +253,7 @@ class PdfEditorActivity : AppCompatActivity() {
         cancel.setOnClickListener { hideDiscardConfirmation() }
         discard.setOnClickListener {
             hideDiscardConfirmation()
-            finish()
+            finishEditor()
         }
 
         overlay.isVisible = true
@@ -265,6 +264,13 @@ class PdfEditorActivity : AppCompatActivity() {
             isVisible = false
             setOnClickListener(null)
         }
+    }
+
+    private fun finishEditor() {
+        if (supportsPdfEditing() && ::fragment.isInitialized && fragment.isEditModeEnabled) {
+            fragment.isEditModeEnabled = false
+        }
+        finish()
     }
 
     @ChecksSdkIntAtLeast(extension = Build.VERSION_CODES.S, api = 18)
