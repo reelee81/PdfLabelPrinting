@@ -2,18 +2,64 @@
 
 package hu.reelee81.pdflabelprinting
 
+import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import androidx.annotation.RequiresExtension
 import androidx.pdf.PdfDocument
 import androidx.pdf.PdfWriteHandle
 import androidx.pdf.ink.EditablePdfViewerFragment
+import androidx.pdf.view.PdfView
 
 @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
 class PdfEditorFragment : EditablePdfViewerFragment() {
 
+    private val pageNavigator = PdfPageNavigator {
+        (activity as? PdfActivity)?.onPdfOperationStateChanged()
+    }
+
+    val currentPageIndex: Int
+        get() = pageNavigator.currentPageIndex
+
+    val isPageNavigationInProgress: Boolean
+        get() = pageNavigator.isInProgress
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        pageNavigator.restore(savedInstanceState)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pageNavigator.save(outState)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onViewStateRestored(savedInstanceState: Bundle?) {
+        super.onViewStateRestored(savedInstanceState)
+        pageNavigator.onViewStateRestored()
+    }
+
+    fun loadDocumentAtPage(uri: Uri, pageIndex: Int) {
+        if (documentUri != uri) pageNavigator.beginDocumentLoad()
+        pageNavigator.scrollToPage(pageIndex)
+        documentUri = uri
+    }
+
+    override fun onPdfViewCreated(pdfView: PdfView) {
+        super.onPdfViewCreated(pdfView)
+        pageNavigator.bind(pdfView)
+    }
+
     override fun onLoadDocumentSuccess(document: PdfDocument) {
         super.onLoadDocumentSuccess(document)
+        pageNavigator.onDocumentLoaded(document)
         (activity as? PdfEditorActivity)?.onEditorDocumentLoaded()
+    }
+
+    override fun onLoadDocumentError(error: Throwable) {
+        super.onLoadDocumentError(error)
+        (activity as? PdfEditorActivity)?.onEditorDocumentLoadFailed()
+        pageNavigator.onDocumentError()
     }
 
     override fun onApplyEditsSuccess(handle: PdfWriteHandle) {
@@ -22,5 +68,10 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
 
     override fun onApplyEditsFailed(error: Throwable) {
         (activity as? PdfEditorActivity)?.onApplyEditsFailed(error)
+    }
+
+    override fun onDestroyView() {
+        pageNavigator.unbind()
+        super.onDestroyView()
     }
 }

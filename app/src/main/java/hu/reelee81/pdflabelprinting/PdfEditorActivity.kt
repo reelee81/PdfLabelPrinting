@@ -1,9 +1,8 @@
-@file:OptIn(androidx.pdf.ExperimentalPdfApi::class)
-
 package hu.reelee81.pdflabelprinting
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
@@ -15,7 +14,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresExtension
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.Toolbar.LayoutParams
 import androidx.core.content.ContextCompat
@@ -37,12 +35,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class PdfEditorActivity : AppCompatActivity() {
+class PdfEditorActivity : PdfActivity() {
 
     companion object {
         const val EXTRA_INPUT_URI = "pdf_input_uri"
         const val EXTRA_OUTPUT_URI = "pdf_output_uri"
+        const val EXTRA_INITIAL_PAGE_INDEX = "pdf_initial_page_index"
+        const val EXTRA_CURRENT_PAGE_INDEX = "pdf_current_page_index"
         private const val FRAG_TAG = "pdfEditorFrag"
+        private const val STATE_DISCARD_CONFIRMATION_VISIBLE = "pdf_discard_confirmation_visible"
     }
 
     private lateinit var fragment: PdfEditorFragment
@@ -86,7 +87,11 @@ class PdfEditorActivity : AppCompatActivity() {
                     .commitNow()
             }
 
-        fragment.documentUri = uri
+        if (savedInstanceState == null) {
+            fragment.loadDocumentAtPage(uri, intent.getIntExtra(EXTRA_INITIAL_PAGE_INDEX, 0))
+        } else {
+            fragment.documentUri = uri
+        }
 
         addSaveButton(toolbar)
 
@@ -95,6 +100,38 @@ class PdfEditorActivity : AppCompatActivity() {
                 finishOrConfirmDiscard()
             }
         })
+
+        if (savedInstanceState?.getBoolean(STATE_DISCARD_CONFIRMATION_VISIBLE) == true) {
+            showDiscardConfirmation()
+        }
+        onPdfOperationStateChanged()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(
+            STATE_DISCARD_CONFIRMATION_VISIBLE,
+            findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)?.isVisible == true
+        )
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun isPdfNavigationInProgress(): Boolean =
+        supportsPdfEditing() && ::fragment.isInitialized && fragment.isPageNavigationInProgress
+
+    override fun isPdfSavingInProgress(): Boolean =
+        saving || (supportsPdfEditing() && ::fragment.isInitialized && fragment.isApplyEditsInProgress)
+
+    override fun isPdfOperationInProgress(): Boolean =
+        isPdfSavingInProgress() || isPdfNavigationInProgress()
+
+    override fun onPdfNavigationStateChanged(inProgress: Boolean) {
+        if (!supportsPdfEditing() || !::fragment.isInitialized) return
+        saveButton?.isEnabled = documentLoaded && !inProgress && !saving && !fragment.isApplyEditsInProgress
+        if (documentLoaded && !inProgress && !saving && !isFinishing && !isDestroyed &&
+            !fragment.isEditModeEnabled
+        ) {
+            fragment.isEditModeEnabled = true
+        }
     }
 
     private fun addSaveButton(toolbar: MaterialToolbar) {
@@ -126,17 +163,18 @@ class PdfEditorActivity : AppCompatActivity() {
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     fun onEditorDocumentLoaded() {
         documentLoaded = true
-        saveButton?.isEnabled = true
-        fragment.view?.post {
-            if (!saving && !isFinishing && !isDestroyed) {
-                fragment.isEditModeEnabled = true
-            }
-        }
+        onPdfOperationStateChanged()
+    }
+
+    fun onEditorDocumentLoadFailed() {
+        documentLoaded = false
+        saveButton?.isEnabled = false
     }
 
     private fun saveEdits() {
         if (!supportsPdfEditing()) return
         if (!documentLoaded) return
+        if (fragment.isPageNavigationInProgress) return
         if (saving || fragment.isApplyEditsInProgress) return
 
         if (!fragment.hasUnsavedChanges) {
@@ -145,12 +183,18 @@ class PdfEditorActivity : AppCompatActivity() {
         }
 
         saving = true
-        saveButton?.isEnabled = false
-        fragment.applyDraftEdits()
+        onPdfOperationStateChanged()
+        try {
+            fragment.applyDraftEdits()
+        } catch (e: Exception) {
+            onApplyEditsFailed(e)
+        }
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     fun onApplyEditsSuccess(handle: PdfWriteHandle) {
+        saving = true
+        onPdfOperationStateChanged()
         lifecycleScope.launch {
             try {
                 val outFile = File(cacheDir, "edited_${System.currentTimeMillis()}.pdf")
@@ -170,16 +214,12 @@ class PdfEditorActivity : AppCompatActivity() {
                 }
 
                 val outUri = FileProvider.getUriForFile(this@PdfEditorActivity, "$packageName.provider", outFile)
-                setResult(
-                    RESULT_OK,
-                    Intent().putExtra(EXTRA_OUTPUT_URI, outUri.toString())
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                )
-                finishEditor()
+                finishEditor(outUri)
             } catch (e: Exception) {
                 saving = false
                 saveButton?.isEnabled = true
                 Toast.makeText(this@PdfEditorActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
+                onPdfOperationStateChanged()
             }
         }
     }
@@ -188,6 +228,7 @@ class PdfEditorActivity : AppCompatActivity() {
         saving = false
         saveButton?.isEnabled = true
         Toast.makeText(this, getString(R.string.pdf_edits_save_failed, error.message), Toast.LENGTH_LONG).show()
+        onPdfOperationStateChanged()
     }
 
     private fun flattenVisibleAnnotations(file: File) {
@@ -224,6 +265,8 @@ class PdfEditorActivity : AppCompatActivity() {
     }
 
     private fun finishOrConfirmDiscard() {
+        if (isPdfSavingInProgress()) return
+
         val overlay = findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)
         if (overlay.isVisible) {
             hideDiscardConfirmation()
@@ -266,7 +309,21 @@ class PdfEditorActivity : AppCompatActivity() {
         }
     }
 
-    private fun finishEditor() {
+    private fun finishEditor(outputUri: Uri? = null) {
+        val currentPageIndex =
+            if (supportsPdfEditing() && ::fragment.isInitialized) fragment.currentPageIndex else 0
+        val resultData = Intent().putExtra(
+            EXTRA_CURRENT_PAGE_INDEX,
+            currentPageIndex
+        )
+        if (outputUri != null) {
+            resultData.putExtra(EXTRA_OUTPUT_URI, outputUri.toString())
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            setResult(RESULT_OK, resultData)
+        } else {
+            setResult(RESULT_CANCELED, resultData)
+        }
+
         if (supportsPdfEditing() && ::fragment.isInitialized && fragment.isEditModeEnabled) {
             fragment.isEditModeEnabled = false
         }

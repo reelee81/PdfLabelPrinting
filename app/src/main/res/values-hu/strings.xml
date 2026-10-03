@@ -68,6 +68,9 @@
     <string name="in_progress_pdf_reading">PDF olvasása\u2026</string>
     <string name="in_progress_page_layout">Oldalelrendezés\u2026</string>
     <string name="in_progress_ui">Felület frissítése\u2026</string>
+    <string name="pdf_navigation_wait">Kérlek várj</string>
+    <string name="pdf_edits_saving">Mentés folyamatban</string>
+    <string name="pdf_navigation_wait_dots" translatable="false">...</string>
     <string name="no_app_can_open_pdf">Nincs olyan alkalmazás, ami meg tudja nyitni a PDF-et</string>
     <string name="no_app_can_share_pdf">Nincs olyan alkalmazás, ami meg tudja osztani a PDF-et</string>
     <string name="print_service_not_available">A nyomtatási szolgáltatás nem érhető el</string>

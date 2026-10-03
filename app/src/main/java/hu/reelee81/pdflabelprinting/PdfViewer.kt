@@ -12,7 +12,6 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.AppCompatImageButton
 import androidx.appcompat.widget.Toolbar.LayoutParams
@@ -21,33 +20,38 @@ import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import com.google.android.material.appbar.MaterialToolbar
 
-class PdfViewer : AppCompatActivity() {
+class PdfViewer : PdfActivity() {
 
     companion object {
         const val EXTRA_URI = "pdf_uri"
         const val EXTRA_OUTPUT_URI = "pdf_output_uri"
+        const val EXTRA_INITIAL_PAGE_INDEX = "pdf_initial_page_index"
         private const val FRAG_TAG = "pdfFragTag"
+        private const val STATE_CURRENT_URI = "pdf_current_uri"
+        private const val STATE_HAS_EDITED_DOCUMENT = "pdf_has_edited_document"
     }
 
     private var currentUri: Uri? = null
+    private var hasEditedDocument = false
 
     private val editLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val editedUri = result.data
-                ?.getStringExtra(PdfEditorActivity.EXTRA_OUTPUT_URI)
-                ?.toUri()
-                ?: return@registerForActivityResult
+        val fragment = supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment
+        val returnedPageIndex = result.data
+            ?.getIntExtra(PdfEditorActivity.EXTRA_CURRENT_PAGE_INDEX, -1)
+            ?.takeIf { it >= 0 }
+        val editedUri = result.data
+            ?.getStringExtra(PdfEditorActivity.EXTRA_OUTPUT_URI)
+            ?.toUri()
 
+        if (result.resultCode == RESULT_OK && editedUri != null) {
             currentUri = editedUri
-            (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
-                ?.documentUri = editedUri
+            hasEditedDocument = true
+            fragment?.loadDocumentAtPage(editedUri, returnedPageIndex ?: fragment.currentPageIndex)
 
             findViewById<MaterialToolbar>(R.id.toolbar).title = resolveDisplayName(editedUri)
-            setResult(
-                RESULT_OK,
-                Intent().putExtra(EXTRA_OUTPUT_URI, editedUri.toString())
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            )
+            setEditedDocumentResult(editedUri)
+        } else if (returnedPageIndex != null) {
+            fragment?.scrollToPage(returnedPageIndex)
         }
     }
 
@@ -74,7 +78,7 @@ class PdfViewer : AppCompatActivity() {
             onBackPressedDispatcher.onBackPressed()
         }
 
-        val uriStr = intent.getStringExtra(EXTRA_URI)
+        val uriStr = savedInstanceState?.getString(STATE_CURRENT_URI) ?: intent.getStringExtra(EXTRA_URI)
         val uri: Uri? = uriStr?.toUri()
         if (uri == null) {
             Toast.makeText(this, getString(R.string.temporary_pdf_not_found), Toast.LENGTH_LONG).show()
@@ -83,6 +87,8 @@ class PdfViewer : AppCompatActivity() {
         }
 
         currentUri = uri
+        hasEditedDocument = savedInstanceState?.getBoolean(STATE_HAS_EDITED_DOCUMENT) ?: false
+        if (hasEditedDocument) setEditedDocumentResult(uri)
 
         toolbar.title = resolveDisplayName(uri)
 
@@ -107,9 +113,33 @@ class PdfViewer : AppCompatActivity() {
                     .commitNow()
             }
 
-        frag.documentUri = uri
+        if (savedInstanceState == null) {
+            val initialPageIndex = intent.getIntExtra(EXTRA_INITIAL_PAGE_INDEX, 0)
+            frag.loadDocumentAtPage(uri, initialPageIndex)
+        } else {
+            frag.documentUri = uri
+        }
 
         addToolbarButtons(toolbar, frag)
+        onPdfOperationStateChanged()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_CURRENT_URI, currentUri?.toString())
+        outState.putBoolean(STATE_HAS_EDITED_DOCUMENT, hasEditedDocument)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun isPdfNavigationInProgress(): Boolean =
+        (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
+            ?.isPageNavigationInProgress == true
+
+    private fun setEditedDocumentResult(uri: Uri) {
+        setResult(
+            RESULT_OK,
+            Intent().putExtra(EXTRA_OUTPUT_URI, uri.toString())
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        )
     }
 
     private fun supportsPdfEditing(): Boolean =
@@ -138,6 +168,7 @@ class PdfViewer : AppCompatActivity() {
                 (layoutParams as LinearLayout.LayoutParams).marginEnd =
                     resources.getDimensionPixelSize(R.dimen.dp_4)
                 setOnClickListener {
+                    if (frag.isPageNavigationInProgress) return@setOnClickListener
                     frag.isTextSearchActive = true
                 }
             }
@@ -147,10 +178,12 @@ class PdfViewer : AppCompatActivity() {
             buttons.addView(
                 createToolbarIconButton(R.drawable.ic_edit_24, getString(R.string.edit_pdf), buttonSize).apply {
                     setOnClickListener {
+                        if (frag.isPageNavigationInProgress) return@setOnClickListener
                         val editUri = currentUri ?: return@setOnClickListener
                         editLauncher.launch(
                             Intent(this@PdfViewer, PdfEditorActivity::class.java).apply {
                                 putExtra(PdfEditorActivity.EXTRA_INPUT_URI, editUri.toString())
+                                putExtra(PdfEditorActivity.EXTRA_INITIAL_PAGE_INDEX, frag.currentPageIndex)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }
                         )

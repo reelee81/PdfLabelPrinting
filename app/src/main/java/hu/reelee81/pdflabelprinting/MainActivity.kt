@@ -310,6 +310,7 @@ class MainActivity : AppCompatActivity() {
     private var signaturePositionEditorDialog: AlertDialog? = null
     private var signaturePositionEditorRerender: (() -> Unit)? = null
     private var savedSoftInputModeForOverlay: Int? = null
+    private var passwordOverlayOwnsSecureFlag = false
     private var pendingCacheCleanupAfterExternalReturn = false
     private var didPauseForExternalAction = false
     private var orientationLockPrevRequested: Int? = null
@@ -705,7 +706,7 @@ class MainActivity : AppCompatActivity() {
             pageItems,
             deleteListener = { pos -> deletePlpPageGroupAndMirrorSource(pos) },
             rotateLeftListener = { pos -> rotateLeftPlpPageGroupAndMirrorSource(pos) },
-            clickListener = { _ -> openPdfWithDriveOrOther() },
+            clickListener = { position -> openPdfWithDriveOrOther(position) },
             selectionChanged = { _, _ -> updateButtonsState() }
         )
         rvThumbnails.adapter = adapter
@@ -1175,17 +1176,17 @@ class MainActivity : AppCompatActivity() {
         val keyboardChanged = prevConfig.keyboard != newConfig.keyboard
         val navigationChanged = prevConfig.navigation != newConfig.navigation
         val touchscreenChanged = prevConfig.touchscreen != newConfig.touchscreen
-        val colorModeChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.O) {
-            prevConfig.colorMode != newConfig.colorMode
-        } else false
-        val fontWeightAdjustmentChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
-            prevConfig.fontWeightAdjustment != newConfig.fontWeightAdjustment
-        } else false
+        val colorModeChanged =
+            Build.VERSION.SDK_INT >= VERSION_CODES.O &&
+                    prevConfig.colorMode != newConfig.colorMode
+        val fontWeightAdjustmentChanged =
+            Build.VERSION.SDK_INT >= VERSION_CODES.S &&
+                    prevConfig.fontWeightAdjustment != newConfig.fontWeightAdjustment
         val mccChanged = prevConfig.mcc != newConfig.mcc
         val mncChanged = prevConfig.mnc != newConfig.mnc
-        val grammaticalGenderChanged = if (Build.VERSION.SDK_INT >= VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            prevConfig.grammaticalGender != newConfig.grammaticalGender
-        } else false
+        val grammaticalGenderChanged =
+            Build.VERSION.SDK_INT >= VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    prevConfig.grammaticalGender != newConfig.grammaticalGender
 
         val nonUiModeConfigChangeNeedsRecreate =
             localeChanged ||
@@ -4265,7 +4266,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isSupportedImageMime(mtLc: String?): Boolean {
-        if (mtLc == null) return false
         return when (mtLc) {
             "image/jpeg", "image/jpg", "image/png" -> true
             else -> false
@@ -4322,16 +4322,15 @@ class MainActivity : AppCompatActivity() {
         return try {
             FileInputStream(this).use { fis ->
                 val header = ByteArray(8)
-                if (fis.read(header) == 8) {
-                    header[0] == 0x89.toByte() &&
-                            header[1] == 0x50.toByte() &&
-                            header[2] == 0x4E.toByte() &&
-                            header[3] == 0x47.toByte() &&
-                            header[4] == 0x0D.toByte() &&
-                            header[5] == 0x0A.toByte() &&
-                            header[6] == 0x1A.toByte() &&
-                            header[7] == 0x0A.toByte()
-                } else false
+                fis.read(header) == 8 &&
+                        header[0] == 0x89.toByte() &&
+                        header[1] == 0x50.toByte() &&
+                        header[2] == 0x4E.toByte() &&
+                        header[3] == 0x47.toByte() &&
+                        header[4] == 0x0D.toByte() &&
+                        header[5] == 0x0A.toByte() &&
+                        header[6] == 0x1A.toByte() &&
+                        header[7] == 0x0A.toByte()
             }
         } catch (_: Throwable) {
             name.lowercase().endsWith(".png")
@@ -4459,6 +4458,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applySoftInputModeForPasswordOverlay() {
+        val secureFlag = WindowManager.LayoutParams.FLAG_SECURE
+        if (!passwordOverlayOwnsSecureFlag && window.attributes.flags and secureFlag == 0) {
+            window.addFlags(secureFlag)
+            passwordOverlayOwnsSecureFlag = true
+        }
+
         if (savedSoftInputModeForOverlay == null) {
             savedSoftInputModeForOverlay = window.attributes.softInputMode
         }
@@ -4469,9 +4474,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreSoftInputModeAfterPasswordOverlay() {
-        val old = savedSoftInputModeForOverlay ?: return
-        savedSoftInputModeForOverlay = null
-        window.setSoftInputMode(old)
+        savedSoftInputModeForOverlay?.let { oldMode ->
+            savedSoftInputModeForOverlay = null
+            window.setSoftInputMode(oldMode)
+        }
+
+        if (passwordOverlayOwnsSecureFlag) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            passwordOverlayOwnsSecureFlag = false
+        }
     }
 
 
@@ -6185,7 +6196,7 @@ class MainActivity : AppCompatActivity() {
         didPauseForExternalAction = false
     }
 
-    private fun openPdfWithDriveOrOther() {
+    private fun openPdfWithDriveOrOther(initialPageIndex: Int) {
         showInProgress(getString(R.string.in_progress_pdf_reading))
         lockScreenOrientation()
 
@@ -6214,21 +6225,19 @@ class MainActivity : AppCompatActivity() {
                 unlockScreenOrientation()
 
                 val shouldUseInternal: Boolean =
-                    if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
+                    Build.VERSION.SDK_INT >= VERSION_CODES.S &&
                         runCatching {
                             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
                             synchronized(prefsBackupLock) {
                                 prefs.getBoolean(KEY_LAST_INNER_PDF_READER, true)
                             }
                         }.getOrDefault(true)
-                    } else {
-                        false
-                    }
 
                 if (shouldUseInternal && isAndroidxPdfAvailable() && isPdfViewerDeclared()) {
                     try {
                         val i = Intent(this@MainActivity, PdfViewer::class.java).apply {
                             putExtra(PdfViewer.EXTRA_URI, uri.toString())
+                            putExtra(PdfViewer.EXTRA_INITIAL_PAGE_INDEX, initialPageIndex)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         pdfViewerLauncher.launch(i)
