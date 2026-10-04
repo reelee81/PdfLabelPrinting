@@ -6225,7 +6225,7 @@ class MainActivity : AppCompatActivity() {
                 unlockScreenOrientation()
 
                 val shouldUseInternal: Boolean =
-                    Build.VERSION.SDK_INT >= VERSION_CODES.S &&
+                    Build.VERSION.SDK_INT >= VERSION_CODES.P &&
                         runCatching {
                             val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
                             synchronized(prefsBackupLock) {
@@ -8152,7 +8152,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 item.isCheckable = true
                 item.isChecked = enabled
-                item.isEnabled = Build.VERSION.SDK_INT >= VERSION_CODES.S
+                item.isEnabled = Build.VERSION.SDK_INT >= VERSION_CODES.P
             }
         }
 

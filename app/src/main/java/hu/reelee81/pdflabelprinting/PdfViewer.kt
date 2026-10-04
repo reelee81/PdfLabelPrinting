@@ -92,14 +92,12 @@ class PdfViewer : PdfActivity() {
 
         toolbar.title = resolveDisplayName(uri)
 
-        val supportsPdfViewer =
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13
+        val supportsPdfViewer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
 
         if (!supportsPdfViewer) {
             Toast.makeText(
                 this,
-                getString(R.string.pdf_viewer_requires_s_ext_13),
+                getString(R.string.pdf_viewer_requires),
                 Toast.LENGTH_LONG
             ).show()
             finish()
