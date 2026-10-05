@@ -24,6 +24,7 @@ androidx-activity = { group = "androidx.activity", name = "activity", version.re
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 itextpdf-kernel = { group = "com.itextpdf.android", name = "kernel-android", version.ref = "itextpdf" }
 itextpdf-layout = { group = "com.itextpdf.android", name = "layout-android", version.ref = "itextpdf" }
+itextpdf-forms = { group = "com.itextpdf.android", name = "forms-android", version.ref = "itextpdf" }
 itextpdf-bc-adapter  = { group = "com.itextpdf.android", name = "bouncy-castle-adapter-android", version.ref = "itextpdf" }
 itextpdf-bc-connector = { group = "com.itextpdf.android", name = "bouncy-castle-connector-android", version.ref = "itextpdf" }
 androidx-pdf-viewer = { group = "androidx.pdf", name = "pdf-viewer-fragment", version.ref = "pdfviewer" }

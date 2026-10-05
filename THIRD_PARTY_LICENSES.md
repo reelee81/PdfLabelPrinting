@@ -45,6 +45,7 @@ The app uses **iText Core for Android 9.8.0** via the following modules:
 
 - `com.itextpdf.android:kernel-android:9.8.0`
 - `com.itextpdf.android:layout-android:9.8.0`
+- `com.itextpdf.android:forms-android:9.8.0`
 - `com.itextpdf.android:bouncy-castle-adapter-android:9.8.0`
 - `com.itextpdf.android:bouncy-castle-connector-android:9.8.0`
 

@@ -4693,7 +4693,7 @@ class MainActivity : AppCompatActivity() {
                     val to = min(from + pageBatch - 1, total)
 
                     PdfDocument(rdr(inputPath, pw)).use { src ->
-                        src.copyPagesTo(from, to, dest)
+                        src.copyPagesTo(from, to, dest, PdfVisibleAppearanceCopier(cacheDir))
                         runCatching { dest.flushCopiedObjects(src) }
                     }
 
