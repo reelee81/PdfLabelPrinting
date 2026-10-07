@@ -18,6 +18,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://maven.ghostscript.com") {
+            content {
+                includeGroup("com.artifex.mupdf")
+            }
+        }
     }
 }
 plugins {

@@ -12,6 +12,7 @@ itextpdf = "9.8.0"
 pdfviewer = "1.0.0-beta01"
 desugar = "2.1.5"
 window = "1.5.1"
+mupdf = "1.28.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,6 +32,7 @@ androidx-pdf-viewer = { group = "androidx.pdf", name = "pdf-viewer-fragment", ve
 androidx-pdf-ink = { group = "androidx.pdf", name = "pdf-ink", version.ref = "pdfviewer" }
 desugar-jdk-libs-nio = { module = "com.android.tools:desugar_jdk_libs_nio", version.ref = "desugar" }
 androidx-window = { module = "androidx.window:window", version.ref = "window" }
+mupdf-fitz = { group = "com.artifex.mupdf", name = "fitz", version.ref = "mupdf" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

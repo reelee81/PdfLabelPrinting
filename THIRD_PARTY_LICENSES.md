@@ -58,6 +58,29 @@ References:
 - <https://www.gnu.org/licenses/agpl-3.0.html>
 
 
+## MuPDF (AGPL-3.0)
+
+The app uses **MuPDF 1.28.5** (Java bindings with native libraries) to measure
+the visible content bounds of PDF pages:
+
+- `com.artifex.mupdf:fitz:1.28.5` (from <https://maven.ghostscript.com>)
+
+MuPDF is developed by Artifex Software, Inc. and is licensed under the
+**GNU Affero General Public License v3**, or can be used under a separate
+commercial license purchased from Artifex.
+
+The native library also contains third-party components bundled by MuPDF
+(for example FreeType, HarfBuzz, zlib, libjpeg, OpenJPEG, jbig2dec and
+Little CMS), each under its own license; see the `thirdparty` directory of
+the MuPDF source distribution.
+
+References:
+- <https://mupdf.com/>
+- <https://github.com/ArtifexSoftware/mupdf>
+- <https://artifex.com/licensing>
+- <https://www.gnu.org/licenses/agpl-3.0.html>
+
+
 ## Core library desugaring (OpenJDK / GPLv2 with Classpath Exception)
 
 - `com.android.tools:desugar_jdk_libs_nio:2.1.5`

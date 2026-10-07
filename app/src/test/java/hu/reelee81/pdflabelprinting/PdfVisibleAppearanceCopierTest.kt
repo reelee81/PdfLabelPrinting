@@ -4,6 +4,7 @@ import com.itextpdf.kernel.font.PdfFontFactory
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
 import com.itextpdf.kernel.pdf.PdfArray
+import com.itextpdf.kernel.pdf.PdfBoolean
 import com.itextpdf.kernel.pdf.PdfDictionary
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfName
@@ -133,6 +134,60 @@ class PdfVisibleAppearanceCopierTest {
         }
         PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
             assertFalse(PdfTextExtractor.getTextFromPage(pdf.getPage(1)).contains("INTENTIONALLY INVISIBLE"))
+        }
+    }
+
+    @Test
+    fun needAppearancesDoesNotReplaceAnExistingFormattedAppearance() {
+        val original = makePdf { pdf ->
+            addWidget(pdf, PdfName.Tx, "FORMATTED VALUE")
+            pdf.getPage(1).annotations.single().pdfObject.put(PdfName.V, PdfString("RAW VALUE"))
+            pdf.catalog.pdfObject.put(PdfName.AcroForm, PdfDictionary().apply {
+                put(PdfName.NeedAppearances, PdfBoolean.TRUE)
+            })
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertTrue(text.contains("FORMATTED VALUE"))
+            assertFalse(text.contains("RAW VALUE"))
+        }
+    }
+
+    @Test
+    fun explicitlyNamedEmptyButtonStateIsNotRegenerated() {
+        val original = makePdf { pdf ->
+            val widget = baseWidget(40f).apply {
+                put(PdfName.FT, PdfName.Btn)
+                put(PdfName.AS, PdfName("Off"))
+                put(PdfName.AP, PdfDictionary().apply {
+                    put(PdfName.N, PdfDictionary().apply { put(PdfName("Off"), PdfName("Off")) })
+                })
+            }
+            pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(widget))
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            assertFalse(pdf.getPage(1).resources.pdfObject.containsKey(PdfName.XObject))
+        }
+    }
+
+    @Test
+    fun widgetAppearanceWithMissingBoxUsesWidgetDimensionsWithoutChangingTheSource() {
+        val original = makePdf { pdf ->
+            val stream = appearance(pdf, "MISSING BOX")
+            stream.remove(PdfName.BBox)
+            val widget = baseWidget(40f).apply {
+                put(PdfName.FT, PdfName.Tx)
+                put(PdfName.AP, PdfDictionary().apply { put(PdfName.N, stream) })
+            }
+            pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(widget))
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            assertTrue(PdfTextExtractor.getTextFromPage(pdf.getPage(1)).contains("MISSING BOX"))
+            assertOnlyFormXObjects(pdf.getPage(1).resources.pdfObject)
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(original))).use { pdf ->
+            val stream = pdf.getPage(1).annotations.single().pdfObject.getAsDictionary(PdfName.AP).getAsStream(PdfName.N)
+            assertFalse(stream.containsKey(PdfName.BBox))
         }
     }
 
@@ -291,7 +346,7 @@ class PdfVisibleAppearanceCopierTest {
                 val end = minOf(count, start + batch - 1)
                 PdfDocument(PdfReader(sourceFile.absolutePath).setMemorySavingMode(true)).use { source ->
                     source.copyPagesTo(start, end, destination, PdfVisibleAppearanceCopier(temporary.root))
-                    destination.flushCopiedObjects(source)
+                    PdfCopySupport.flushCopiedObjects(destination, source)
                 }
                 for (page in start..end) destination.getPage(page).flush()
                 val runtime = Runtime.getRuntime()
@@ -312,8 +367,10 @@ class PdfVisibleAppearanceCopierTest {
                     output.setFlushUnusedObjects(true)
                     for (index in start..end) {
                         val target = output.addNewPage()
-                        val form = source.getPage(index).copyAsFormXObject(output)
-                        PdfCanvas(target).addXObjectAt(form, 0f, 0f)
+                        val sourcePage = source.getPage(index)
+                        val form = sourcePage.copyAsFormXObject(output)
+                        form.bBox = PdfArray(PdfCopySupport.visibleBox(sourcePage))
+                        PdfCanvas(target).addXObjectWithTransformationMatrix(form, 1f, 0f, 0f, 1f, 0f, 0f)
                         form.flush()
                         target.flush()
                     }
@@ -332,7 +389,10 @@ class PdfVisibleAppearanceCopierTest {
 
     @Test
     fun suppliedMixedPdfsCanBeImportedWithReopenedSinglePageBatches() {
-        val folder = listOf(File("Urlapmezos_anotacios_teszt_pdf_ek"), File("../Urlapmezos_anotacios_teszt_pdf_ek"))
+        val folder = listOf(
+            File("Teszt_PDF_ek/02_urlapmezos_anotacios_teszt_pdf_ek"),
+            File("../Teszt_PDF_ek/02_urlapmezos_anotacios_teszt_pdf_ek")
+        )
             .firstOrNull { it.isDirectory }
         assumeTrue("Local PDF review fixtures are not present", folder != null)
         val outputFolder = File("build/appearance-review").apply { mkdirs() }
@@ -372,7 +432,7 @@ class PdfVisibleAppearanceCopierTest {
         PdfDocument(PdfReader(ByteArrayInputStream(original)).setMemorySavingMode(true)).use { source ->
             PdfDocument(PdfWriter(bytes)).use { destination ->
                 source.copyPagesTo(1, source.numberOfPages, destination, PdfVisibleAppearanceCopier(temporary.root))
-                destination.flushCopiedObjects(source)
+                PdfCopySupport.flushCopiedObjects(destination, source)
             }
         }
         if (!asXObject) return bytes.toByteArray()

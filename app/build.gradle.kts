@@ -23,13 +23,14 @@ fun parseLocalesConfig(file: File): List<String> {
 android {
     namespace = "hu.reelee81.pdflabelprinting"
     compileSdk = 37
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 37
-        versionCode = 25
-        versionName = "25.0"
+        versionCode = 26
+        versionName = "26.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -78,5 +79,6 @@ dependencies {
     implementation(libs.androidx.pdf.viewer)
     implementation(libs.androidx.pdf.ink)
     implementation(libs.androidx.window)
+    implementation(libs.mupdf.fitz)
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
 }

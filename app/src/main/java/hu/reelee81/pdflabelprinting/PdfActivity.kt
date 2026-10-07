@@ -93,8 +93,6 @@ abstract class PdfActivity : AppCompatActivity() {
             panel.layoutParams = params
         }
 
-        // PdfView beta01 loses forced scrubber visibility on in-place rotation.
-        // Reinflate after navigation/saving finishes, but not for window-bounds-only changes.
         var resourceChanges = ActivityInfo.CONFIG_ORIENTATION or ActivityInfo.CONFIG_UI_MODE or
             ActivityInfo.CONFIG_LOCALE or ActivityInfo.CONFIG_LAYOUT_DIRECTION or ActivityInfo.CONFIG_FONT_SCALE or
             ActivityInfo.CONFIG_DENSITY or ActivityInfo.CONFIG_MCC or ActivityInfo.CONFIG_MNC or

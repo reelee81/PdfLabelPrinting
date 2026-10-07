@@ -20,7 +20,6 @@ import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfStream
 import com.itextpdf.kernel.pdf.PdfString
 import com.itextpdf.kernel.pdf.PdfWriter
-import com.itextpdf.kernel.pdf.annot.PdfAnnotation
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
 import com.itextpdf.kernel.pdf.extgstate.PdfExtGState
@@ -33,6 +32,8 @@ import kotlin.math.max
 
 internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPageExtraCopier {
     override fun copy(fromPage: PdfPage, toPage: PdfPage) {
+        PdfCopySupport.repairInvalidBoxes(toPage)
+        PdfIdentityCMapRepair.repair(toPage)
         val annotations = fromPage.pdfObject.getAsArray(PdfName.Annots) ?: return
         var canvas: PdfCanvas? = null
         fun contentCanvas(): PdfCanvas = canvas ?: PdfCanvas(toPage, true).also { canvas = it }
@@ -48,10 +49,12 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
                 if (!validRectangle(rect)) continue
 
                 val appearance = normalAppearance(annotation)
+                val fieldType = if (subtype == PdfName.Widget) inherited(annotation, PdfName.FT) else null
                 if (appearance != null) {
-                    drawAppearance(appearance, rect, contentCanvas(), toPage.document)
+                    drawAppearance(appearance, rect, contentCanvas(), toPage.document, subtype == PdfName.Widget)
                 } else if (subtype == PdfName.Widget) {
-                    val fieldType = inherited(annotation, PdfName.FT)
+                    val normal = annotation.getAsDictionary(PdfName.AP)?.getAsDictionary(PdfName.N)
+                    if (normal?.get(appearanceState(annotation, normal)) is PdfName) continue
                     if (fieldType == PdfName.Tx || fieldType == PdfName.Btn || fieldType == PdfName.Ch) {
                         drawGeneratedWidget(annotation, fromPage.document, rect, contentCanvas(), toPage.document)
                     }
@@ -65,7 +68,6 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
             canvas?.release()
         }
 
-        // The imported working copy is static; no widget trees or comment popups need to survive.
         toPage.pdfObject.remove(PdfName.Annots)
     }
 
@@ -87,10 +89,18 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
         return offState
     }
 
-    private fun drawAppearance(stream: PdfStream, rect: Rectangle, canvas: PdfCanvas, destination: PdfDocument) {
-        val bounds = stream.getAsArray(PdfName.BBox)?.toRectangle() ?: return
+    private fun drawAppearance(
+        stream: PdfStream,
+        rect: Rectangle,
+        canvas: PdfCanvas,
+        destination: PdfDocument,
+        allowMissingBounds: Boolean = false
+    ) {
+        val bounds = stream.getAsArray(PdfName.BBox)?.toRectangle()
+            ?: if (allowMissingBounds) Rectangle(0f, 0f, rect.width, rect.height) else return
         if (!validRectangle(bounds)) return
         val copied = stream.copyTo(destination) as PdfStream
+        if (!copied.containsKey(PdfName.BBox)) copied.put(PdfName.BBox, PdfArray(bounds))
         val xObject = PdfFormXObject(copied)
         val matrix = FloatArray(6)
         PdfFormXObject.calcAppearanceTransformToAnnotRect(xObject, rect).getMatrix(matrix)
@@ -107,7 +117,6 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
         canvas: PdfCanvas,
         destination: PdfDocument
     ) {
-        // Only this widget is regenerated. Its writer/font cache is closed before the next widget.
         val file = File.createTempFile("pdf_widget_appearance_", ".pdf", cacheDir)
         try {
             PdfDocument(PdfWriter(file.absolutePath)).use { scratch ->
@@ -135,7 +144,6 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
                 if (widget.getAsName(PdfName.FT) == PdfName.Btn && flags and (1 shl 15) != 0) {
                     val state = appearanceState(annotation, annotation.getAsDictionary(PdfName.AP)?.getAsDictionary(PdfName.N))
                     if (state != offState) {
-                        // A missing radio appearance still needs its own on-state name, not the group's other states.
                         val normal = widget.getAsDictionary(PdfName.AP)?.getAsDictionary(PdfName.N) ?: PdfDictionary()
                         if (!normal.containsKey(state)) normal.put(state, PdfFormXObject(Rectangle(0f, 0f)).pdfObject)
                         widget.put(PdfName.AP, PdfDictionary().apply { put(PdfName.N, normal) })
@@ -145,15 +153,17 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
                 val field = PdfFormField.makeFormField(widget, scratch)
                     ?: throw IOException("Cannot generate PDF form field appearance")
                 if (!field.regenerateField()) throw IOException("Cannot regenerate PDF form field appearance")
-                page.addAnnotation(PdfAnnotation.makeAnnotation(widget))
-                defaults.getAsArray(PdfName.Fields).add(widget)
+                val regenerated = field.widgets.singleOrNull()
+                    ?: throw IOException("Missing regenerated PDF form widget")
+                page.addAnnotation(regenerated)
+                defaults.getAsArray(PdfName.Fields).add(field.pdfObject)
             }
             PdfDocument(PdfReader(file.absolutePath).setMemorySavingMode(true)).use { scratch ->
                 val widget = scratch.getPage(1).pdfObject.getAsArray(PdfName.Annots).getAsDictionary(0)
                 val normal = widget.getAsDictionary(PdfName.AP)?.get(PdfName.N)
                 val stream = (normal as? PdfStream)
                     ?: (normal as? PdfDictionary)?.getAsStream(
-                        appearanceState(annotation, annotation.getAsDictionary(PdfName.AP)?.getAsDictionary(PdfName.N))
+                        appearanceState(widget, normal)
                     )
                     ?: throw IOException("Missing regenerated PDF form field appearance")
                 drawAppearance(stream, rect, canvas, destination)
@@ -203,7 +213,6 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
             for (offset in 0..values.size - 8 step 8) {
                 val quad = values.copyOfRange(offset, offset + 8)
                 if (quad.any { !it.isFinite() }) continue
-                // Accept both the common Z ordering and the PDF specification's counterclockwise ordering.
                 val cross = (quad[2] - quad[0]) * (quad[5] - quad[1]) -
                     (quad[3] - quad[1]) * (quad[4] - quad[0])
                 val q = if (cross > 0f) floatArrayOf(

@@ -112,22 +112,15 @@ import com.itextpdf.kernel.colors.ColorConstants
 import com.itextpdf.kernel.exceptions.BadPasswordException
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
-import com.itextpdf.kernel.geom.Vector
 import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.EncryptionConstants
+import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.ReaderProperties
 import com.itextpdf.kernel.pdf.WriterProperties
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
-import com.itextpdf.kernel.pdf.canvas.parser.EventType
-import com.itextpdf.kernel.pdf.canvas.parser.PdfCanvasProcessor
-import com.itextpdf.kernel.pdf.canvas.parser.data.IEventData
-import com.itextpdf.kernel.pdf.canvas.parser.data.ImageRenderInfo
-import com.itextpdf.kernel.pdf.canvas.parser.data.PathRenderInfo
-import com.itextpdf.kernel.pdf.canvas.parser.data.TextRenderInfo
-import com.itextpdf.kernel.pdf.canvas.parser.listener.IEventListener
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -4694,7 +4687,7 @@ class MainActivity : AppCompatActivity() {
 
                     PdfDocument(rdr(inputPath, pw)).use { src ->
                         src.copyPagesTo(from, to, dest, PdfVisibleAppearanceCopier(cacheDir))
-                        runCatching { dest.flushCopiedObjects(src) }
+                        runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                     }
 
                     val added = to - from + 1
@@ -4783,7 +4776,7 @@ class MainActivity : AppCompatActivity() {
 
                             PdfDocument(rdr(source.absolutePath)).use { src ->
                                 src.copyPagesTo(from, to, dest)
-                                runCatching { dest.flushCopiedObjects(src) }
+                                runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                             }
 
                             val added = to - from + 1
@@ -5387,7 +5380,7 @@ class MainActivity : AppCompatActivity() {
                             val to = min(from + pageBatch - 1, to1)
                             PdfDocument(rdr(srcFile.absolutePath)).use { src ->
                                 src.copyPagesTo(from, to, dest)
-                                runCatching { dest.flushCopiedObjects(src) }
+                                runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                             }
                             val added = to - from + 1
                             for (i in 0 until added) {
@@ -5637,7 +5630,7 @@ class MainActivity : AppCompatActivity() {
                         val to = min(from + pageBatch - 1, to1)
                         PdfDocument(rdr(srcPath)).use { src ->
                             src.copyPagesTo(from, to, dest)
-                            runCatching { dest.flushCopiedObjects(src) }
+                            runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                         }
                         val added = to - from + 1
                         for (i in 0 until added) {
@@ -5798,7 +5791,7 @@ class MainActivity : AppCompatActivity() {
                         val to = min(from + pageBatch - 1, to1)
                         PdfDocument(rdr(srcPath)).use { src ->
                             src.copyPagesTo(from, to, dest)
-                            runCatching { dest.flushCopiedObjects(src) }
+                            runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                         }
                         val added = to - from + 1
                         for (i in 0 until added) {
@@ -6669,7 +6662,7 @@ class MainActivity : AppCompatActivity() {
                 while (from <= total) {
                     val to = min(from + batch - 1, total)
                     src.copyPagesTo(from, to, dest)
-                    runCatching { dest.flushCopiedObjects(src) }
+                    runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                     val added = to - from + 1
                     for (i in 0 until added) {
                         val p = dest.numberOfPages - i
@@ -6695,6 +6688,7 @@ class MainActivity : AppCompatActivity() {
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
         val writerProps = writerProps()
+        var fitBounds: PdfMuPdfFitBounds? = null
 
         try {
 
@@ -6744,6 +6738,12 @@ class MainActivity : AppCompatActivity() {
 
                 val partFile = File((outFile.parentFile ?: cacheDir), outFile.name + ".p" + chunkIndex.toString())
 
+                if (scaleIndRequested && fitIndRequested) {
+                    fitBounds = runCatching { PdfMuPdfFitBounds(source.absolutePath) }
+                        .onFailure { Log.w("PdfMuPdfFitBounds", "MuPDF open failed", it) }
+                        .getOrNull()
+                }
+
                 PdfDocument(rdr(source.absolutePath)).use { src ->
                     PdfDocument(
                         PdfWriter(partFile.absolutePath, writerProps)
@@ -6755,279 +6755,25 @@ class MainActivity : AppCompatActivity() {
                         while (globalIdx <= srcEnd) {
                             val page1Based = globalIdx + 1
                             val sp = src.getPage(page1Based)
-                            val sz = sp.pageSize
+                            val sz = PdfCopySupport.visibleBox(sp)
 
                             var contentWidth  = sz.width
                             var contentHeight = sz.height
 
-                            var contentOriginX = 0f
-                            var contentOriginY = 0f
+                            var contentOriginX = sz.x
+                            var contentOriginY = sz.y
                             var hasBoundingBox = false
 
                             if (scaleIndRequested && fitIndRequested) {
-                                runCatching {
-                                    val listener = object : IEventListener {
-
-                                        var box: Rectangle? = null
-
-                                        private fun includeRect(r: Rectangle) {
-                                            if (box == null) {
-                                                box = Rectangle(r)
-                                            } else {
-                                                val b = box!!
-                                                val bx1 = b.x
-                                                val by1 = b.y
-                                                val bx2 = b.x + b.width
-                                                val by2 = b.y + b.height
-
-                                                val rx1 = r.x
-                                                val ry1 = r.y
-                                                val rx2 = r.x + r.width
-                                                val ry2 = r.y + r.height
-
-                                                val nx1 = min(bx1, rx1)
-                                                val ny1 = min(by1, ry1)
-                                                val nx2 = max(bx2, rx2)
-                                                val ny2 = max(by2, ry2)
-
-                                                box = Rectangle(nx1, ny1, nx2 - nx1, ny2 - ny1)
-                                            }
-                                        }
-
-                                        override fun eventOccurred(data: IEventData?, type: EventType?) {
-                                            if (data == null || type == null) return
-                                            when (type) {
-                                                EventType.RENDER_TEXT -> {
-                                                    val tri = data as TextRenderInfo
-                                                    val ascent = tri.ascentLine
-                                                    val descent = tri.descentLine
-                                                    val x = descent.startPoint.get(Vector.I1)
-                                                    val y = descent.startPoint.get(Vector.I2)
-                                                    val w = ascent.endPoint.get(Vector.I1) - x
-                                                    val h = ascent.endPoint.get(Vector.I2) - y
-                                                    if (w > 0 && h > 0) {
-                                                        includeRect(Rectangle(x, y, w, h))
-                                                    }
-                                                }
-                                                EventType.RENDER_IMAGE -> {
-                                                    val iri = data as ImageRenderInfo
-                                                    val ctm = iri.imageCtm
-                                                    val p0 = Vector(0f, 0f, 1f).cross(ctm)
-                                                    val p1 = Vector(1f, 0f, 1f).cross(ctm)
-                                                    val p2 = Vector(0f, 1f, 1f).cross(ctm)
-                                                    val p3 = Vector(1f, 1f, 1f).cross(ctm)
-
-                                                    val xs = floatArrayOf(
-                                                        p0.get(Vector.I1),
-                                                        p1.get(Vector.I1),
-                                                        p2.get(Vector.I1),
-                                                        p3.get(Vector.I1)
-                                                    )
-                                                    val ys = floatArrayOf(
-                                                        p0.get(Vector.I2),
-                                                        p1.get(Vector.I2),
-                                                        p2.get(Vector.I2),
-                                                        p3.get(Vector.I2)
-                                                    )
-
-                                                    var minX = xs[0]
-                                                    var maxX = xs[0]
-                                                    var minY = ys[0]
-                                                    var maxY = ys[0]
-                                                    for (i in 1 until xs.size) {
-                                                        val xx = xs[i]
-                                                        val yy = ys[i]
-                                                        if (xx < minX) minX = xx
-                                                        if (xx > maxX) maxX = xx
-                                                        if (yy < minY) minY = yy
-                                                        if (yy > maxY) maxY = yy
-                                                    }
-                                                    val w = maxX - minX
-                                                    val h = maxY - minY
-                                                    if (w > 0 && h > 0) {
-                                                        includeRect(Rectangle(minX, minY, w, h))
-                                                    }
-                                                }
-                                                EventType.RENDER_PATH -> {
-                                                    val pri = data as PathRenderInfo
-                                                    val path = pri.path
-                                                    val ctm = pri.ctm
-                                                    val subpaths = path.subpaths
-                                                    for (sub in subpaths) {
-                                                        val pts = sub.piecewiseLinearApproximation
-                                                        if (pts == null || pts.isEmpty()) continue
-                                                        for (pt in pts) {
-                                                            val v = Vector(pt.x.toFloat(), pt.y.toFloat(), 1f).cross(ctm)
-                                                            val px = v.get(Vector.I1)
-                                                            val py = v.get(Vector.I2)
-                                                            if (px.isFinite() && py.isFinite()) {
-                                                                includeRect(Rectangle(px, py, 0f, 0f))
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                else -> {
-                                                }
-                                            }
-                                        }
-
-                                        override fun getSupportedEvents(): Set<EventType> {
-                                            return setOf(
-                                                EventType.RENDER_TEXT,
-                                                EventType.RENDER_IMAGE,
-                                                EventType.RENDER_PATH
-                                            )
-                                        }
-                                    }
-
-                                    val processor = PdfCanvasProcessor(listener)
-                                    processor.processPageContent(sp)
-                                    val box = listener.box
-                                    if (box != null) {
-
-                                        var effectiveBox = box
-
-                                        val tol = 2f
-
-                                        val bLeft = box.x
-                                        val bBottom = box.y
-                                        val bRight = box.x + box.width
-                                        val bTop = box.y + box.height
-
-                                        val pLeft = sz.x
-                                        val pBottom = sz.y
-                                        val pRight = sz.x + sz.width
-                                        val pTop = sz.y + sz.height
-
-                                        val looksFullPage =
-                                            abs(bLeft - pLeft) <= tol &&
-                                                    abs(bBottom - pBottom) <= tol &&
-                                                    abs(bRight - pRight) <= tol &&
-                                                    abs(bTop - pTop) <= tol
-
-                                        val overshootsPage =
-                                            bLeft < pLeft - 0.1f || bBottom < pBottom - 0.1f || bRight > pRight + 0.1f || bTop > pTop + 0.1f
-
-                                        if (looksFullPage || overshootsPage) {
-
-                                            val listenerNoOpFiltered = object : IEventListener {
-
-                                                private var bbox: Rectangle? = null
-
-                                                private val clipBox = Rectangle(
-                                                    sz.x - tol,
-                                                    sz.y - tol,
-                                                    sz.width + 2f * tol,
-                                                    sz.height + 2f * tol
-                                                )
-
-                                                private fun intersect(a: Rectangle, b: Rectangle): Rectangle? {
-                                                    val x1 = max(a.x, b.x)
-                                                    val y1 = max(a.y, b.y)
-                                                    val x2 = min(a.x + a.width,  b.x + b.width)
-                                                    val y2 = min(a.y + a.height, b.y + b.height)
-                                                    if (x2 < x1 || y2 < y1) return null
-                                                    return Rectangle(x1, y1, x2 - x1, y2 - y1)
-                                                }
-
-                                                private fun includeRect(r: Rectangle) {
-                                                    val rr = intersect(r, clipBox) ?: return
-                                                    val cur = bbox
-                                                    if (cur == null) {
-                                                        bbox = Rectangle(rr.x, rr.y, rr.width, rr.height)
-                                                        return
-                                                    }
-                                                    val nx1 = min(cur.x, rr.x)
-                                                    val ny1 = min(cur.y, rr.y)
-                                                    val nx2 = max(cur.x + cur.width, rr.x + rr.width)
-                                                    val ny2 = max(cur.y + cur.height, rr.y + rr.height)
-                                                    bbox = Rectangle(nx1, ny1, nx2 - nx1, ny2 - ny1)
-                                                }
-
-                                                override fun eventOccurred(data: IEventData?, type: EventType?) {
-                                                    if (data == null || type == null) return
-
-                                                    when (type) {
-                                                        EventType.RENDER_TEXT -> {
-                                                            val tri = data as TextRenderInfo
-                                                            includeRect(tri.ascentLine.boundingRectangle)
-                                                            includeRect(tri.descentLine.boundingRectangle)
-                                                        }
-
-                                                        EventType.RENDER_IMAGE -> {
-                                                            val iri = data as ImageRenderInfo
-                                                            val ctm = iri.imageCtm
-                                                            val p0 = Vector(0f, 0f, 1f).cross(ctm)
-                                                            val p1 = Vector(1f, 0f, 1f).cross(ctm)
-                                                            val p2 = Vector(0f, 1f, 1f).cross(ctm)
-                                                            val p3 = Vector(1f, 1f, 1f).cross(ctm)
-
-                                                            val xs = floatArrayOf(p0.get(Vector.I1), p1.get(Vector.I1), p2.get(Vector.I1), p3.get(Vector.I1))
-                                                            val ys = floatArrayOf(p0.get(Vector.I2), p1.get(Vector.I2), p2.get(Vector.I2), p3.get(Vector.I2))
-
-                                                            var minX = xs[0]; var maxX = xs[0]
-                                                            var minY = ys[0]; var maxY = ys[0]
-                                                            for (i in 1 until 4) {
-                                                                val xx = xs[i]; val yy = ys[i]
-                                                                if (xx < minX) minX = xx
-                                                                if (xx > maxX) maxX = xx
-                                                                if (yy < minY) minY = yy
-                                                                if (yy > maxY) maxY = yy
-                                                            }
-                                                            val w = maxX - minX
-                                                            val h = maxY - minY
-                                                            if (w > 0 && h > 0) includeRect(Rectangle(minX, minY, w, h))
-                                                        }
-
-                                                        EventType.RENDER_PATH -> {
-                                                            val pri = data as PathRenderInfo
-
-                                                            if (pri.operation == PathRenderInfo.NO_OP) return
-
-                                                            val path = pri.path
-                                                            val ctm = pri.ctm
-                                                            for (sub in path.subpaths) {
-                                                                val pts = sub.piecewiseLinearApproximation ?: continue
-                                                                for (pt in pts) {
-                                                                    val v = Vector(pt.x.toFloat(), pt.y.toFloat(), 1f).cross(ctm)
-                                                                    val px = v.get(Vector.I1)
-                                                                    val py = v.get(Vector.I2)
-                                                                    if (px.isFinite() && py.isFinite()) {
-                                                                        includeRect(Rectangle(px, py, 0f, 0f))
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-
-                                                        else -> Unit
-                                                    }
-                                                }
-
-                                                override fun getSupportedEvents(): Set<EventType> =
-                                                    setOf(EventType.RENDER_TEXT, EventType.RENDER_IMAGE, EventType.RENDER_PATH)
-
-                                                fun getBounds(): Rectangle? = bbox
-                                            }
-
-                                            PdfCanvasProcessor(listenerNoOpFiltered).processPageContent(sp)
-                                            val box2 = listenerNoOpFiltered.getBounds()
-
-                                            if (box2 != null) {
-                                                val shrinkW = box2.width < box.width - 2f
-                                                val shrinkH = box2.height < box.height - 2f
-                                                if (shrinkW || shrinkH) {
-                                                    effectiveBox = box2
-                                                }
-                                            }
-                                        }
-
-                                        contentWidth = effectiveBox.width
-                                        contentHeight = effectiveBox.height
-                                        contentOriginX = effectiveBox.x
-                                        contentOriginY = effectiveBox.y
+                                runCatching { fitBounds?.contentBox(globalIdx, sz) }
+                                    .onFailure { Log.w("PdfMuPdfFitBounds", "Fit measurement failed on page $page1Based", it) }
+                                    .getOrNull()?.let { box ->
+                                        contentWidth = box.width
+                                        contentHeight = box.height
+                                        contentOriginX = box.x
+                                        contentOriginY = box.y
                                         hasBoundingBox = true
                                     }
-                                }
                             }
 
                             val rotation = sourceRotation.getOrElse(globalIdx) { 0 }
@@ -7116,6 +6862,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             val fx  = sp.copyAsFormXObject(pdf)
+                            fx.bBox = PdfArray(sz)
                             canvas.saveState()
 
                             val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
@@ -7133,8 +6880,8 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 scaledW = sz.width * finalScale
                                 scaledH = sz.height * finalScale
-                                originX = 0f
-                                originY = 0f
+                                originX = sz.x
+                                originY = sz.y
                             }
 
                             val rotatedScaledW = if (isSideways) scaledH else scaledW
@@ -7185,9 +6932,9 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
 
-                            canvas.concatMatrix(a, b, c, d, e, f)
+                            PdfCopySupport.concatPlacementMatrix(canvas, a, b, c, d, e, f)
 
-                            canvas.addXObjectAt(fx, 0f, 0f)
+                            canvas.addXObjectWithTransformationMatrix(fx, 1f, 0f, 0f, 1f, 0f, 0f)
                             runCatching { fx.flush() }
                             canvas.restoreState()
 
@@ -7207,6 +6954,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+
+                fitBounds?.close()
+                fitBounds = null
 
                 partFiles += partFile
                 outPageStart = outPageEndInclusive + 1
@@ -7228,7 +6978,7 @@ class MainActivity : AppCompatActivity() {
 
                         PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
                             partDoc.copyPagesTo(from, to, destDoc)
-                            runCatching { destDoc.flushCopiedObjects(partDoc) }
+                            runCatching { PdfCopySupport.flushCopiedObjects(destDoc, partDoc) }
                         }
 
                         val count = to - from + 1
@@ -7245,6 +6995,7 @@ class MainActivity : AppCompatActivity() {
             partFiles.forEach { runCatching { it.delete() } }
 
         } finally {
+            fitBounds?.let { runCatching { it.close() } }
             if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
         }
     }
@@ -7823,7 +7574,7 @@ class MainActivity : AppCompatActivity() {
                             val to = min(from + pageBatch - 1, to1)
                             PdfDocument(rdr(srcPath)).use { src ->
                                 src.copyPagesTo(from, to, destDoc)
-                                runCatching { destDoc.flushCopiedObjects(src) }
+                                runCatching { PdfCopySupport.flushCopiedObjects(destDoc, src) }
                             }
                             val added = to - from + 1
                             for (i in 0 until added) {
@@ -7849,7 +7600,7 @@ class MainActivity : AppCompatActivity() {
 
                             PdfDocument(rdr(replacement.absolutePath)).use { replDoc ->
                                 replDoc.copyPagesTo(1, 1, destDoc)
-                                runCatching { destDoc.flushCopiedObjects(replDoc) }
+                                runCatching { PdfCopySupport.flushCopiedObjects(destDoc, replDoc) }
                             }
                             runCatching { destDoc.lastPage?.flush() }
                         } else {
@@ -7938,7 +7689,7 @@ class MainActivity : AppCompatActivity() {
                     val to = min(from + pageBatch - 1, to1)
                     PdfDocument(rdr(srcPath)).use { src ->
                         src.copyPagesTo(from, to, dest)
-                        runCatching { dest.flushCopiedObjects(src) }
+                        runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
                     }
                     val added = to - from + 1
                     for (i in 0 until added) {
@@ -7972,7 +7723,7 @@ class MainActivity : AppCompatActivity() {
 
                         PdfDocument(rdr(replPath)).use { repl ->
                             repl.copyPagesTo(1, 1, destSrcDoc)
-                            runCatching { destSrcDoc.flushCopiedObjects(repl) }
+                            runCatching { PdfCopySupport.flushCopiedObjects(destSrcDoc, repl) }
                         }
                         runCatching { destSrcDoc.lastPage?.flush() }
 
