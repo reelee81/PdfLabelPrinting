@@ -6,6 +6,7 @@ import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDictionary
 import com.itextpdf.kernel.pdf.PdfName
+import com.itextpdf.kernel.pdf.PdfNull
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfStream
 import com.itextpdf.kernel.pdf.PdfString
@@ -17,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -52,6 +54,57 @@ class PdfCopySupportTest {
             page.setMediaBox(Rectangle(0f, 0f)).setCropBox(Rectangle(0f, 0f))
             PdfCopySupport.repairInvalidBoxes(page)
             assertEquals(PageSize.LETTER.toString(), PdfCopySupport.visibleBox(page).toString())
+        }
+    }
+
+    @Test
+    fun onlyACropBoxOutsideTheMediaBoxDropsThePageContent() {
+        PdfDocument(PdfWriter(ByteArrayOutputStream())).use { pdf ->
+            val disjoint = pdf.addNewPage(PageSize(600f, 800f))
+            PdfCanvas(disjoint).rectangle(10.0, 10.0, 50.0, 50.0).fill()
+            disjoint.setCropBox(Rectangle(600f, 800f, 400f, 200f))
+            assertFalse(PdfCopySupport.repairInvalidBoxes(disjoint))
+            assertFalse(disjoint.pdfObject.containsKey(PdfName.Contents))
+            assertEquals(disjoint.pageSize.toString(), PdfCopySupport.visibleBox(disjoint).toString())
+
+            val empty = pdf.addNewPage(PageSize(800f, 600f))
+            PdfCanvas(empty).rectangle(10.0, 10.0, 50.0, 50.0).fill()
+            empty.setCropBox(Rectangle(0f, 0f))
+            assertTrue(PdfCopySupport.repairInvalidBoxes(empty))
+            assertTrue(empty.pdfObject.containsKey(PdfName.Contents))
+            assertEquals(empty.pageSize.toString(), PdfCopySupport.visibleBox(empty).toString())
+        }
+    }
+
+    @Test
+    fun brokenContentEntriesAreDroppedAndValidOnesKept() {
+        PdfDocument(PdfWriter(ByteArrayOutputStream())).use { pdf ->
+            val mixed = pdf.addNewPage()
+            val valid = PdfStream("0 0 10 10 re f".toByteArray(Charsets.US_ASCII)).apply { makeIndirect(pdf) }
+            mixed.pdfObject.put(PdfName.Contents, PdfArray().apply {
+                add(valid)
+                add(PdfNull.PDF_NULL)
+                add(PdfDictionary())
+            })
+            PdfCopySupport.repairContents(mixed)
+            val contents = mixed.pdfObject.getAsArray(PdfName.Contents)
+            assertEquals(1, contents.size())
+            assertArrayEquals(valid.bytes, contents.getAsStream(0).bytes)
+
+            val broken = pdf.addNewPage()
+            broken.pdfObject.put(PdfName.Contents, PdfArray().apply { add(PdfNull.PDF_NULL) })
+            PdfCopySupport.repairContents(broken)
+            assertFalse(broken.pdfObject.containsKey(PdfName.Contents))
+
+            val single = pdf.addNewPage()
+            single.pdfObject.put(PdfName.Contents, valid)
+            PdfCopySupport.repairContents(single)
+            assertEquals(valid, single.pdfObject.getAsStream(PdfName.Contents))
+
+            val nullContents = pdf.addNewPage()
+            nullContents.pdfObject.put(PdfName.Contents, PdfNull.PDF_NULL)
+            PdfCopySupport.repairContents(nullContents)
+            assertEquals(PdfNull.PDF_NULL, nullContents.pdfObject.get(PdfName.Contents))
         }
     }
 

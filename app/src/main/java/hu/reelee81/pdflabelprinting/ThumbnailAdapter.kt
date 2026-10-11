@@ -50,6 +50,8 @@ class ThumbnailAdapter(
     private val items: MutableList<PageItem>,
     private val deleteListener: (Int) -> Unit,
     private val rotateLeftListener: (Int) -> Unit,
+    private val positionListener: (Int) -> Unit,
+    private val positionIconFor: (Int) -> Int,
     private val clickListener: (Int) -> Unit,
     private val selectionChanged: (Int, Boolean) -> Unit
 ) : RecyclerView.Adapter<ThumbnailAdapter.ViewHolder>() {
@@ -238,6 +240,13 @@ class ThumbnailAdapter(
                 rotateLeftListener(posNow)
             }
         }
+        holder.btnPosition.setImageResource(positionIconFor(safePos))
+        holder.btnPosition.setOnClickListener {
+            val posNow = holder.bindingAdapterPosition
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
+                positionListener(posNow)
+            }
+        }
         holder.itemView.setOnClickListener {
             val posNow = holder.bindingAdapterPosition
             if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
@@ -267,10 +276,11 @@ class ThumbnailAdapter(
                 CompoundButtonCompat.setButtonTintList(holder.cbSel, csl)
                 ImageViewCompat.setImageTintList(holder.btnDelete, csl)
                 ImageViewCompat.setImageTintList(holder.btnRotateLeft, csl)
+                ImageViewCompat.setImageTintList(holder.btnPosition, csl)
             } else {
                 val cbCsl  = AppCompatResources.getColorStateList(ctx, R.color.ic_checkbox_page_color)
-                val delCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_page_color)
-                val rotCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_page_color)
+                val delCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_color)
+                val rotCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_color)
 
                 if (cbCsl != null) {
                     CompoundButtonCompat.setButtonTintList(holder.cbSel, cbCsl)
@@ -280,6 +290,7 @@ class ThumbnailAdapter(
                 }
                 if (rotCsl != null) {
                     ImageViewCompat.setImageTintList(holder.btnRotateLeft, rotCsl)
+                    ImageViewCompat.setImageTintList(holder.btnPosition, rotCsl)
                 }
             }
         }
@@ -633,6 +644,7 @@ class ThumbnailAdapter(
         val iv: ImageView = itemView.findViewById(R.id.iv_thumbnail)
         val btnDelete: ImageButton = itemView.findViewById(R.id.btn_delete)
         val btnRotateLeft: ImageButton = itemView.findViewById(R.id.btn_rotate_left)
+        val btnPosition: ImageButton = itemView.findViewById(R.id.btn_position)
         val tvSize: TextView = itemView.findViewById(R.id.tv_size_label)
         val cbSel: AppCompatCheckBox = itemView.findViewById(R.id.cb_select)
         val tvPageNumber: TextView = itemView.findViewById(R.id.page_number)

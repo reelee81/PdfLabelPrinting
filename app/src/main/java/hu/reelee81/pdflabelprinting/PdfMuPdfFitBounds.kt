@@ -26,9 +26,11 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         if (pageIndex !in 0 until document.countPages()) return null
         val page = document.loadPage(pageIndex)
         val device = VisibleBoundsDevice(fillStroke)
+        var keepStore = false
         try {
             val pdfPage = page as? PDFPage ?: return null
             pdfPage.runPageContents(device, Matrix.Inverted(pdfPage.transform), null)
+            keepStore = !device.hadImage
             val bounds = device.bounds ?: return null
             val left = max(bounds.x0, visibleBox.left)
             val bottom = max(bounds.y0, visibleBox.bottom)
@@ -39,7 +41,7 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         } finally {
             device.destroy()
             page.destroy()
-            Context.emptyStore()
+            if (!keepStore) Context.emptyStore()
         }
     }
 
@@ -54,6 +56,9 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         private var ignored = 0
 
         var bounds: Rect? = null
+            private set
+
+        var hadImage = false
             private set
 
         private fun add(rect: Rect?, clip: Boolean) {
@@ -186,6 +191,7 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         }
 
         override fun fillImage(img: Image?, ctm: Matrix?, alpha: Float, cp: Int) {
+            hadImage = true
             try {
                 mark(unitRect(ctm), alpha)
             } finally {
@@ -194,6 +200,7 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         }
 
         override fun fillImageMask(img: Image?, ctm: Matrix?, cs: ColorSpace?, color: FloatArray?, alpha: Float, cp: Int) {
+            hadImage = true
             try {
                 mark(unitRect(ctm), alpha)
             } finally {
@@ -203,6 +210,7 @@ internal class PdfMuPdfFitBounds(path: String) : AutoCloseable {
         }
 
         override fun clipImageMask(img: Image?, ctm: Matrix?) {
+            hadImage = true
             try {
                 add(unitRect(ctm), true)
             } finally {

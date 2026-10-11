@@ -88,7 +88,10 @@ class PdfVisibleAppearanceCopierTest {
                 put(PdfName.Kids, PdfArray())
                 makeIndirect(pdf)
             }
-            val widget = baseWidget(40f).apply { put(PdfName.Parent, parent) }
+            val widget = baseWidget(40f).apply {
+                put(PdfName.Parent, parent)
+                put(PdfName.F, PdfNumber(FLAG_PRINT))
+            }
             pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(widget))
             parent.getAsArray(PdfName.Kids).add(widget)
             form.getAsArray(PdfName.Fields).add(parent)
@@ -105,6 +108,7 @@ class PdfVisibleAppearanceCopierTest {
     fun checkboxOffDoesNotUseAnAvailableOnAppearance() {
         val original = makePdf { pdf ->
             val widget = baseWidget(40f).apply {
+                put(PdfName.F, PdfNumber(FLAG_PRINT))
                 put(PdfName.FT, PdfName.Btn)
                 put(PdfName.V, PdfName("Off"))
                 put(PdfName.AS, PdfName("Off"))
@@ -192,9 +196,9 @@ class PdfVisibleAppearanceCopierTest {
     }
 
     @Test
-    fun commentsPopupsAndHiddenAppearancesAreNotPainted() {
+    fun popupsAndHiddenWithoutPrintAreNotPainted() {
         val original = makePdf { pdf ->
-            for ((subtype, flags) in listOf(PdfName.Text to 0, PdfName.Popup to 0, PdfName.Widget to 2)) {
+            for ((subtype, flags) in listOf(PdfName.Popup to FLAG_PRINT, PdfName.Widget to FLAG_HIDDEN, PdfName.Text to FLAG_HIDDEN)) {
                 val annotation = baseWidget(40f).apply {
                     put(PdfName.Subtype, subtype)
                     put(PdfName.F, PdfNumber(flags))
@@ -210,24 +214,199 @@ class PdfVisibleAppearanceCopierTest {
     }
 
     @Test
-    fun allMarkupQuadsAreDrawnAboveContentWithMultiplyBlend() {
+    fun invisibleFlagHidesOnlyNonStandardAnnotations() {
         val original = makePdf { pdf ->
-            val annotation = baseWidget(40f).apply {
-                put(PdfName.Subtype, PdfName.Highlight)
-                put(PdfName.QuadPoints, PdfArray(floatArrayOf(
-                    20f, 80f, 120f, 80f, 20f, 60f, 120f, 60f,
-                    20f, 40f, 120f, 40f, 20f, 20f, 120f, 20f
-                )))
+            for ((index, entry) in listOf(
+                PdfName.Widget to "INVISIBLE SIGNATURE",
+                PdfName.Stamp to "INVISIBLE STAMP",
+                PdfName("CustomMark") to "CUSTOM MARK"
+            ).withIndex()) {
+                val annotation = baseWidget(40f + index * 40f).apply {
+                    put(PdfName.Subtype, entry.first)
+                    put(PdfName.F, PdfNumber(FLAG_INVISIBLE or FLAG_PRINT or FLAG_LOCKED))
+                    put(PdfName.AP, PdfDictionary().apply { put(PdfName.N, appearance(pdf, entry.second)) })
+                }
+                pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(annotation))
             }
-            pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(annotation))
         }
         PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
-            val page = pdf.getPage(1)
-            val content = page.contentBytes.toString(Charsets.US_ASCII)
-            assertTrue(content.contains("20 80 m"))
-            assertTrue(content.contains("20 40 m"))
-            val states = page.resources.pdfObject.getAsDictionary(PdfName.ExtGState)
-            assertEquals(PdfName.Multiply, states.getAsDictionary(states.keySet().first()).getAsName(PdfName.BM))
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertTrue(text.contains("INVISIBLE SIGNATURE"))
+            assertTrue(text.contains("INVISIBLE STAMP"))
+            assertFalse(text.contains("CUSTOM MARK"))
+            assertTrue(pdf.getPage(1).annotations.isEmpty())
+        }
+    }
+
+    @Test
+    fun pushbuttonWithoutAppearanceIsNotGenerated() {
+        val original = makePdf { pdf ->
+            val font = pdf.addFont(PdfFontFactory.createFont())
+            pdf.catalog.pdfObject.put(PdfName.AcroForm, PdfDictionary().apply {
+                put(PdfName.Fields, PdfArray())
+                put(PdfName.DA, PdfString("/Helv 12 Tf 0 g"))
+                put(PdfName.DR, PdfDictionary().apply {
+                    put(PdfName.Font, PdfDictionary().apply { put(PdfName("Helv"), font.pdfObject) })
+                })
+            })
+            val button = baseWidget(40f).apply {
+                put(PdfName.F, PdfNumber(FLAG_PRINT))
+                put(PdfName.FT, PdfName.Btn)
+                put(PdfName.Ff, PdfNumber(1 shl 16))
+                put(PdfName.T, PdfString("reset"))
+                put(PdfName.MK, PdfDictionary().apply { put(PdfName.CA, PdfString("PUSH CAPTION")) })
+            }
+            pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(button))
+            pdf.catalog.pdfObject.getAsDictionary(PdfName.AcroForm).getAsArray(PdfName.Fields).add(button)
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(original))).use { source ->
+            PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { result ->
+                assertArrayEquals(source.getPage(1).contentBytes, result.getPage(1).contentBytes)
+                assertTrue(result.getPage(1).annotations.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun annotationsWithoutPrintAreNotPaintedButFieldsWithoutPrintAre() {
+        val original = makePdf { pdf ->
+            for ((index, entry) in listOf(
+                Triple(PdfName.Ink, 0, "NOPRINT INK"),
+                Triple(PdfName.Stamp, FLAG_NO_VIEW, "NOPRINT STAMP"),
+                Triple(PdfName.Widget, 0, "NOPRINT FIELD")
+            ).withIndex()) {
+                val annotation = baseWidget(40f + index * 40f).apply {
+                    put(PdfName.Subtype, entry.first)
+                    if (entry.second != 0) put(PdfName.F, PdfNumber(entry.second))
+                    put(PdfName.AP, PdfDictionary().apply { put(PdfName.N, appearance(pdf, entry.third)) })
+                }
+                pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(annotation))
+            }
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertFalse(text.contains("NOPRINT INK"))
+            assertFalse(text.contains("NOPRINT STAMP"))
+            assertTrue(text.contains("NOPRINT FIELD"))
+            assertTrue(pdf.getPage(1).annotations.isEmpty())
+        }
+    }
+
+    @Test
+    fun existingAppearanceIsPaintedForNoViewHiddenPrintAndTextAnnotations() {
+        val original = makePdf { pdf ->
+            for ((subtype, flags, text) in listOf(
+                Triple(PdfName.Widget, FLAG_NO_VIEW, "NOVIEW FIELD"),
+                Triple(PdfName.Ink, FLAG_HIDDEN or FLAG_PRINT, "HIDDEN PRINT INK"),
+                Triple(PdfName.Text, FLAG_PRINT, "NOTE ICON")
+            )) {
+                val annotation = baseWidget(40f + flags * 10f).apply {
+                    put(PdfName.Subtype, subtype)
+                    put(PdfName.F, PdfNumber(flags))
+                    put(PdfName.AP, PdfDictionary().apply { put(PdfName.N, appearance(pdf, text)) })
+                }
+                pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(annotation))
+            }
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertTrue(text.contains("NOVIEW FIELD"))
+            assertTrue(text.contains("HIDDEN PRINT INK"))
+            assertTrue(text.contains("NOTE ICON"))
+            assertTrue(pdf.getPage(1).annotations.isEmpty())
+        }
+    }
+
+    @Test
+    fun markupWithoutAppearanceIsNotGenerated() {
+        val original = makePdf { pdf ->
+            for (subtype in listOf(PdfName.Highlight, PdfName.Underline, PdfName.Squiggly, PdfName.StrikeOut)) {
+                val annotation = baseWidget(40f).apply {
+                    put(PdfName.Subtype, subtype)
+                    put(PdfName.F, PdfNumber(FLAG_PRINT))
+                    put(PdfName.QuadPoints, PdfArray(floatArrayOf(20f, 80f, 120f, 80f, 20f, 60f, 120f, 60f)))
+                }
+                pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(annotation))
+            }
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(original))).use { source ->
+            PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { result ->
+                assertArrayEquals(source.getPage(1).contentBytes, result.getPage(1).contentBytes)
+                assertTrue(result.getPage(1).annotations.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun missingFieldAppearanceIsGeneratedOnlyWhenPrintableAndNotHidden() {
+        val original = makePdf { pdf ->
+            val font = pdf.addFont(PdfFontFactory.createFont())
+            pdf.catalog.pdfObject.put(PdfName.AcroForm, PdfDictionary().apply {
+                put(PdfName.Fields, PdfArray())
+                put(PdfName.DA, PdfString("/Helv 12 Tf 0 g"))
+                put(PdfName.DR, PdfDictionary().apply {
+                    put(PdfName.Font, PdfDictionary().apply { put(PdfName("Helv"), font.pdfObject) })
+                })
+            })
+            for ((index, pair) in listOf(
+                0 to "NOPRINT VALUE",
+                (FLAG_HIDDEN or FLAG_PRINT) to "HIDDEN VALUE",
+                FLAG_PRINT to "PRINTED VALUE"
+            ).withIndex()) {
+                val widget = baseWidget(40f + index * 40f).apply {
+                    put(PdfName.F, PdfNumber(pair.first))
+                    put(PdfName.FT, PdfName.Tx)
+                    put(PdfName.T, PdfString("field$index"))
+                    put(PdfName.V, PdfString(pair.second))
+                }
+                pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(widget))
+                pdf.catalog.pdfObject.getAsDictionary(PdfName.AcroForm).getAsArray(PdfName.Fields).add(widget)
+            }
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertTrue(text.contains("PRINTED VALUE"))
+            assertFalse(text.contains("NOPRINT VALUE"))
+            assertFalse(text.contains("HIDDEN VALUE"))
+        }
+    }
+
+    @Test
+    fun failedFieldGenerationSkipsOnlyThatFieldNotTheImport() {
+        val original = makePdf { pdf ->
+            val broken = baseWidget(40f).apply {
+                put(PdfName.F, PdfNumber(FLAG_PRINT))
+                put(PdfName.FT, PdfName.Ch)
+                put(PdfName.Ff, PdfNumber(1 shl 17))
+                put(PdfName.T, PdfString("combo"))
+                put(PdfName.V, PdfString("NO OPTIONS"))
+            }
+            pdf.getPage(1).addAnnotation(PdfAnnotation.makeAnnotation(broken))
+            addWidget(pdf, PdfName.Tx, "STILL VISIBLE", 120f)
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { pdf ->
+            val text = PdfTextExtractor.getTextFromPage(pdf.getPage(1))
+            assertTrue(text.contains("BODY"))
+            assertTrue(text.contains("STILL VISIBLE"))
+            assertTrue(pdf.getPage(1).annotations.isEmpty())
+        }
+        assertTrue(temporary.root.listFiles().orEmpty().none { it.name.startsWith("pdf_widget_appearance_") })
+    }
+
+    @Test
+    fun cropBoxOutsideMediaBoxGivesABlankPageWithoutAnnotations() {
+        val original = makePdf { pdf ->
+            pdf.getPage(1).setCropBox(Rectangle(700f, 900f, 100f, 100f))
+            addWidget(pdf, PdfName.Tx, "OUTSIDE")
+        }
+        PdfDocument(PdfReader(ByteArrayInputStream(original))).use { source ->
+            PdfDocument(PdfReader(ByteArrayInputStream(import(original)))).use { result ->
+                val page = result.getPage(1)
+                assertEquals(source.getPage(1).pageSize.toString(), page.pageSize.toString())
+                assertEquals(page.pageSize.toString(), PdfCopySupport.visibleBox(page).toString())
+                assertEquals("", PdfTextExtractor.getTextFromPage(page).trim())
+                assertTrue(page.annotations.isEmpty())
+            }
         }
     }
 
@@ -247,6 +426,7 @@ class PdfVisibleAppearanceCopierTest {
     fun radioOnStateIsGeneratedWhenItHasNoAppearance() {
         val original = makePdf { pdf ->
             val widget = baseWidget(40f).apply {
+                put(PdfName.F, PdfNumber(FLAG_PRINT))
                 put(PdfName.FT, PdfName.Btn)
                 put(PdfName.Ff, PdfNumber(1 shl 15))
                 put(PdfName.V, PdfName("Selected"))
@@ -315,6 +495,7 @@ class PdfVisibleAppearanceCopierTest {
                 when (index % 10) {
                     0 -> {
                         val widget = baseWidget(40f).apply {
+                            put(PdfName.F, PdfNumber(FLAG_PRINT))
                             put(PdfName.FT, PdfName.Tx)
                             put(PdfName.T, PdfString("value$index"))
                             put(PdfName.V, PdfString("VALUE $index"))
@@ -480,6 +661,14 @@ class PdfVisibleAppearanceCopierTest {
         PdfCanvas(form, pdf).beginText().setFontAndSize(PdfFontFactory.createFont(), 10f)
             .moveText(3.0, 10.0).showText(text).endText()
         return form.pdfObject
+    }
+
+    private companion object {
+        const val FLAG_INVISIBLE = 1
+        const val FLAG_HIDDEN = 2
+        const val FLAG_PRINT = 4
+        const val FLAG_NO_VIEW = 32
+        const val FLAG_LOCKED = 128
     }
 
     private fun assertOnlyFormXObjects(resources: PdfDictionary) {

@@ -61,6 +61,7 @@
     <string name="in_progress_signing">Signing\u2026</string>
     <string name="in_progress_signature_editing">Signature editing\u2026</string>
     <string name="in_progress_rotation">Rotation\u2026</string>
+    <string name="in_progress_position">Positioning\u2026</string>
     <string name="in_progress_print">Print\u2026</string>
     <string name="in_progress_send">Send\u2026</string>
     <string name="in_progress_save">Save\u2026</string>
@@ -83,6 +84,7 @@
     <string name="failed_to_add_empty_page_with_msg">Failed to add empty page: %1$s</string>
     <string name="failed_to_delete_selected_groups_with_msg">Failed to delete selected groups: %1$s</string>
     <string name="failed_to_rotate_selected_groups_with_msg">Failed to rotate selected groups: %1$s</string>
+    <string name="failed_to_position_selected_groups_with_msg">Failed to position selected groups: %1$s</string>
     <string name="failed_to_delete_signature">Failed to delete signature</string>
     <string name="signature_image_invalid">Signature image not found/invalid</string>
     <string name="enter_value_0_100">Enter a value between 0 and 100 (mm)</string>
@@ -129,6 +131,7 @@
     <string name="failed_to_rename_encrypted_pdf">Failed to rename encrypted PDF</string>
     <string name="battery_optimization">Battery optimization</string>
     <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app; otherwise, the system may stop processing when you put the app in the background or lock the screen. Different manufacturers place this setting in different locations, but in general you can find it under Settings → Apps → Manage apps → Pdf Label Printing, then look for “Power usage” or “Battery” options where you can turn it on or off. Even then, it may still happen that the process is paused on some devices because certain manufacturers are very aggressive with battery saving (for example when the screen is locked). Therefore, if you want to be absolutely sure that long operations finish, stay on the app screen, because in that case it keeps the display awake until the processing finishes.</string>
+    <string name="position_on_page">Position on page(s)</string>
     <string name="search_pdf">SEARCH</string>
     <string name="edit_pdf">Edit</string>
     <string name="save_pdf_edits">SAVE</string>

@@ -2,9 +2,11 @@ package hu.reelee81.pdflabelprinting
 
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
+import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfName
 import com.itextpdf.kernel.pdf.PdfPage
+import com.itextpdf.kernel.pdf.PdfStream
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import kotlin.math.max
 import kotlin.math.min
@@ -22,15 +24,40 @@ internal object PdfCopySupport {
         } else media
     }
 
-    fun repairInvalidBoxes(page: PdfPage) {
+    fun repairInvalidBoxes(page: PdfPage): Boolean {
         if (!validRectangle(page.pageSize)) page.setMediaBox(Rectangle(PageSize.LETTER))
         val media = page.pageSize
         val crop = page.cropBox
-        if (!validRectangle(crop) || crop.right <= media.left || crop.left >= media.right ||
-            crop.top <= media.bottom || crop.bottom >= media.top
-        ) {
+        if (!validRectangle(crop)) {
             page.setCropBox(Rectangle(media))
+            return true
         }
+        if (crop.right <= media.left || crop.left >= media.right || crop.top <= media.bottom || crop.bottom >= media.top) {
+            page.setCropBox(Rectangle(media))
+            page.pdfObject.remove(PdfName.Contents)
+            return false
+        }
+        return true
+    }
+
+    fun repairContents(page: PdfPage) {
+        val dictionary = page.pdfObject
+        val contents = try {
+            dictionary.getAsArray(PdfName.Contents)
+        } catch (_: RuntimeException) {
+            null
+        } ?: return
+        val valid = PdfArray()
+        for (index in 0 until contents.size()) {
+            val stream = try {
+                contents.get(index) as? PdfStream
+            } catch (_: RuntimeException) {
+                null
+            } ?: continue
+            valid.add(contents.get(index, false) ?: stream)
+        }
+        if (valid.size() == contents.size()) return
+        if (valid.isEmpty) dictionary.remove(PdfName.Contents) else dictionary.put(PdfName.Contents, valid)
     }
 
     fun flushCopiedObjects(destination: PdfDocument, source: PdfDocument) {

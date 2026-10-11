@@ -145,6 +145,7 @@ import kotlin.math.min
 import kotlin.math.round
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
@@ -186,6 +187,9 @@ class MainActivity : AppCompatActivity() {
         const val KEY_FIT = "fit"
         const val KEY_NORMAL_FIT = "normal_fit"
         const val KEY_LABEL_FIT = "label_fit"
+        const val KEY_POSITION = "position"
+        const val KEY_NORMAL_POSITION = "normal_position"
+        const val KEY_LABEL_POSITION = "label_position"
         const val KEY_BATCH_PAGE = "batch_page"
         const val KEY_NORMAL_BATCH_PAGE = "normal_batch_page"
         const val KEY_LABEL_BATCH_PAGE = "label_batch_page"
@@ -207,6 +211,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_THEME_RESTORE_SELECTED_CSV = "key_theme_restore_selected_csv"
         const val KEY_THEME_RESTORE_NSV_Y = "key_theme_restore_nsv_y"
         const val KEY_THEME_RESTORE_ROTATION_CSV = "key_theme_restore_rotation_csv"
+        const val KEY_THEME_RESTORE_POSITION_CSV = "key_theme_restore_position_csv"
         const val KEY_BACKUP_SELECTED = "backup_selected"
         const val KEY_BACKUP_THUMB_FIRST = "backup_thumb_first"
         const val KEY_BACKUP_THUMB_OFFSET = "backup_thumb_offset"
@@ -218,7 +223,10 @@ class MainActivity : AppCompatActivity() {
         const val KEY_BACKUP_SCALE = "backup_scale"
         const val KEY_BACKUP_FIT = "backup_fit"
         const val KEY_BACKUP_ROTATION = "backup_rotation"
+        const val KEY_BACKUP_POSITION = "backup_position"
+        const val KEY_BACKUP_DEFAULT_POSITION = "backup_default_position"
         const val DEFAULT_SIG_POS_X_MM = 155
+        const val DEFAULT_POSITION = 5
         const val DEFAULT_SIG_POS_Y_MM = 245
 
         private const val SOURCE_TEMP_NAME = "source_temp.pdf"
@@ -284,6 +292,8 @@ class MainActivity : AppCompatActivity() {
     private var isFirstCreate = true
     private var batchValid = true
     private var sourceRotation: IntArray = IntArray(0)
+    private var sourcePosition: IntArray = IntArray(0)
+    private var defaultPosition: Int = DEFAULT_POSITION
     private var restoreImeAfterBackground = false
     private var restoreImeAfterBackgroundEditTextId = View.NO_ID
     private var restoreImeAfterBackgroundWasActive = false
@@ -699,6 +709,8 @@ class MainActivity : AppCompatActivity() {
             pageItems,
             deleteListener = { pos -> deletePlpPageGroupAndMirrorSource(pos) },
             rotateLeftListener = { pos -> rotateLeftPlpPageGroupAndMirrorSource(pos) },
+            positionListener = { pos -> showPositionDialog(listOf(pos), fromMainWindow = false) },
+            positionIconFor = { pos -> positionIcon(positionsOfPlpIndices(listOf(pos))) },
             clickListener = { position -> openPdfWithDriveOrOther(position) },
             selectionChanged = { _, _ -> updateButtonsState() }
         )
@@ -893,6 +905,10 @@ class MainActivity : AppCompatActivity() {
             ?.getIntArray("state_source_rotation")
             ?.let { sourceRotation = it }
 
+        savedInstanceState
+            ?.getIntArray("state_source_position")
+            ?.let { sourcePosition = it }
+
         runCatching {
             val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
 
@@ -922,6 +938,11 @@ class MainActivity : AppCompatActivity() {
 
             restoredRotation?.let { sourceRotation = it }
 
+            if (sp.contains(KEY_THEME_RESTORE_POSITION_CSV)) {
+                val positionCsv = sp.getString(KEY_THEME_RESTORE_POSITION_CSV, "") ?: ""
+                sourcePosition = positionCsv.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+            }
+
             val indicesToSelectPrefs: Set<Int>? = csv.split(',')
                 .mapNotNull { it.toIntOrNull() }
                 .toSet()
@@ -936,6 +957,7 @@ class MainActivity : AppCompatActivity() {
                         remove(KEY_THEME_RESTORE_OFFSET)
                         remove(KEY_THEME_RESTORE_SELECTED_CSV)
                         remove(KEY_THEME_RESTORE_ROTATION_CSV)
+                        remove(KEY_THEME_RESTORE_POSITION_CSV)
                         remove(KEY_THEME_RESTORE_NSV_Y)
                     }
                 }
@@ -1038,6 +1060,11 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
+                    if (binding.overlayDialogPositionOnPage.isVisible) {
+                        binding.overlayDialogPositionOnPage.performClick()
+                        return
+                    }
+
                     if (binding.overlayDialogMaxCoordinates.isVisible) {
                         binding.overlayDialogMaxCoordinates.performClick()
                         return
@@ -1133,6 +1160,7 @@ class MainActivity : AppCompatActivity() {
             binding.overlayDialogSignatureChooserPanel,
             binding.overlayDialogTimestampPanel,
             binding.overlayDialogBatteryOptimizationPanel,
+            binding.overlayDialogPositionOnPagePanel,
             binding.overlayDialogMaxCoordinatesPanel,
             binding.overlayProgressDialogPanel,
             binding.overlayProgressDialogUpdateUiPanel
@@ -1316,6 +1344,7 @@ class MainActivity : AppCompatActivity() {
                         putInt(KEY_THEME_RESTORE_OFFSET, offset)
                         putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
                         putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
+                        putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
                         putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
                         putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
                     }
@@ -1553,16 +1582,21 @@ class MainActivity : AppCompatActivity() {
 
                         var passwordBytes: ByteArray? = null
                         var attempt = 0
+                        var openFailure: Exception? = null
 
                         while (true) {
                             val canOpen = try {
-                                PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { }
-                                true
+                                val encrypted = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { it.reader.isEncrypted }
+                                !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                if (!isBadPassword(e)) throw e
-                                false
+                                if (isBadPassword(e)) {
+                                    false
+                                } else {
+                                    openFailure = e
+                                    true
+                                }
                             }
 
                             if (canOpen) break
@@ -1600,7 +1634,7 @@ class MainActivity : AppCompatActivity() {
                             progressStarted = true
                         }
 
-                        appendPdfToSourceTemp(tempSrc, passwordBytes)
+                        appendPdfToSourceTempOrRepair(tempSrc, passwordBytes, openFailure) { ensureActive() }
 
                     } finally {
                         runCatching { tempSrc.delete() }
@@ -3160,6 +3194,9 @@ class MainActivity : AppCompatActivity() {
                 putBoolean(KEY_FIT, false)
                 putBoolean(KEY_NORMAL_FIT, false)
                 putBoolean(KEY_LABEL_FIT, false)
+                putInt(KEY_POSITION, DEFAULT_POSITION)
+                putInt(KEY_NORMAL_POSITION, DEFAULT_POSITION)
+                putInt(KEY_LABEL_POSITION, DEFAULT_POSITION)
                 putString(KEY_MARGIN, "0")
                 putString(KEY_NORMAL_MARGIN, "0")
                 putString(KEY_LABEL_MARGIN, "2")
@@ -3223,6 +3260,7 @@ class MainActivity : AppCompatActivity() {
                         putString(KEY_NORMAL_SIG_POS_Y, sigY)
                         putBoolean(KEY_NORMAL_SCALE, scale)
                         putBoolean(KEY_NORMAL_FIT, fit)
+                        putInt(KEY_NORMAL_POSITION, defaultPosition)
                         putString(KEY_NORMAL_BATCH_PAGE, batchVal)
                         putBoolean(KEY_NORMAL_PASSWORD_OUT, passwordOutChecked)
                         putString(KEY_NORMAL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3238,6 +3276,7 @@ class MainActivity : AppCompatActivity() {
                         putString(KEY_LABEL_SIG_POS_Y, sigY)
                         putBoolean(KEY_LABEL_SCALE, scale)
                         putBoolean(KEY_LABEL_FIT, fit)
+                        putInt(KEY_LABEL_POSITION, defaultPosition)
                         putString(KEY_LABEL_BATCH_PAGE, batchVal)
                         putBoolean(KEY_LABEL_PASSWORD_OUT, passwordOutChecked)
                         putString(KEY_LABEL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3252,6 +3291,7 @@ class MainActivity : AppCompatActivity() {
                 putString(KEY_SIG_POS_Y, sigY)
                 putBoolean(KEY_SCALE, scale)
                 putBoolean(KEY_FIT, fit)
+                putInt(KEY_POSITION, defaultPosition)
                 putString(KEY_BATCH_PAGE, batchVal)
                 putBoolean(KEY_PASSWORD_OUT, passwordOutChecked)
                 putString(KEY_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3275,6 +3315,7 @@ class MainActivity : AppCompatActivity() {
                 putString(KEY_SIG_POS_Y, signaturePosY.text.toString())
                 putBoolean(KEY_SCALE, scaleSwitch.isChecked)
                 putBoolean(KEY_FIT, fitSwitch.isChecked)
+                putInt(KEY_POSITION, defaultPosition)
                 putString(KEY_BATCH_PAGE, batchPage.text.toString())
                 putBoolean(KEY_PASSWORD_OUT, passwordOutCb.isChecked)
                 putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
@@ -3307,6 +3348,7 @@ class MainActivity : AppCompatActivity() {
             sigY = prefs.getString(KEY_SIG_POS_Y, DEFAULT_SIG_POS_Y_MM.toString()) ?: DEFAULT_SIG_POS_Y_MM.toString()
             scale = prefs.getBoolean(KEY_SCALE, false)
             fit = prefs.getBoolean(KEY_FIT, false)
+            defaultPosition = validPosition(prefs.getInt(KEY_POSITION, DEFAULT_POSITION))
             batchVal = prefs.getString(KEY_BATCH_PAGE, "20") ?: "20"
             passwordOutChecked = prefs.getBoolean(KEY_PASSWORD_OUT, false)
         }
@@ -3386,6 +3428,7 @@ class MainActivity : AppCompatActivity() {
                             ) ?: DEFAULT_SIG_POS_Y_MM.toString()),
                             "nlScale" to prefs.getBoolean(KEY_NORMAL_SCALE, false),
                             "nlFit" to prefs.getBoolean(KEY_NORMAL_FIT, false),
+                            "nlPosition" to prefs.getInt(KEY_NORMAL_POSITION, DEFAULT_POSITION),
                             "nlBatchPage" to (prefs.getString(KEY_NORMAL_BATCH_PAGE, "20") ?: "20"),
                             "nlPasswordOut" to prefs.getBoolean(KEY_NORMAL_PASSWORD_OUT, false),
                             "nlFileNameTemplate" to (prefs.getString(
@@ -3410,6 +3453,7 @@ class MainActivity : AppCompatActivity() {
                             ) ?: DEFAULT_SIG_POS_Y_MM.toString()),
                             "nlScale" to prefs.getBoolean(KEY_LABEL_SCALE, true),
                             "nlFit" to prefs.getBoolean(KEY_LABEL_FIT, false),
+                            "nlPosition" to prefs.getInt(KEY_LABEL_POSITION, DEFAULT_POSITION),
                             "nlBatchPage" to (prefs.getString(KEY_LABEL_BATCH_PAGE, "20") ?: "20"),
                             "nlPasswordOut" to prefs.getBoolean(KEY_LABEL_PASSWORD_OUT, false),
                             "nlFileNameTemplate" to (prefs.getString(
@@ -3435,6 +3479,8 @@ class MainActivity : AppCompatActivity() {
             scaleSwitch.isChecked = data["nlScale"] as Boolean
             fitSwitch.isChecked = data["nlFit"] as Boolean
             fitSwitch.isEnabled = scaleSwitch.isChecked
+            defaultPosition = validPosition(data["nlPosition"] as Int)
+            sourcePosition.fill(defaultPosition)
             batchPage.setText(data["nlBatchPage"] as String)
             passwordOutCb.isChecked = data["nlPasswordOut"] as Boolean
 
@@ -3657,6 +3703,22 @@ class MainActivity : AppCompatActivity() {
         rotateLeftBtn.isEnabled   = hasPages && hasSelection
         rotateLeftBtn.isActivated = hasSelection
 
+        val positionBtn = findViewById<AppCompatImageButton>(R.id.position_select)
+        if (positionBtn.getTag(R.id.position_select) != true) {
+            positionBtn.setOnClickListener {
+                val selectedIdx = viewModel.pageItems
+                    .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+                if (selectedIdx.isNotEmpty()) showPositionDialog(selectedIdx, fromMainWindow = true)
+            }
+            positionBtn.setTag(R.id.position_select, true)
+        }
+        positionBtn.isEnabled   = hasPages && hasSelection
+        positionBtn.isActivated = hasSelection
+        val positionTargets = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+            .ifEmpty { viewModel.pageItems.indices.toList() }
+        positionBtn.setImageResource(positionIcon(positionsOfPlpIndices(positionTargets)))
+
         fastScroller?.setEnabledWhen(hasPages)
 
         val shouldNotify = (lastGlobalAllSelected == null || lastGlobalAllSelected != allChecked)
@@ -3765,6 +3827,8 @@ class MainActivity : AppCompatActivity() {
                     remove(KEY_BACKUP_SCALE)
                     remove(KEY_BACKUP_FIT)
                     remove(KEY_BACKUP_ROTATION)
+                    remove(KEY_BACKUP_POSITION)
+                    remove(KEY_BACKUP_DEFAULT_POSITION)
 
                     putString(KEY_BACKUP_ROWS, cfg.rows.toString())
                     putString(KEY_BACKUP_COLUMNS, cfg.cols.toString())
@@ -3774,6 +3838,8 @@ class MainActivity : AppCompatActivity() {
                     putBoolean(KEY_BACKUP_SCALE, cfg.scaleIndividually)
                     putBoolean(KEY_BACKUP_FIT, cfg.fitIndividually)
                     putString(KEY_BACKUP_ROTATION, rotationCsv)
+                    putString(KEY_BACKUP_POSITION, sourcePosition.joinToString(","))
+                    putInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
                 }
             }
         }.onFailure {
@@ -3796,6 +3862,8 @@ class MainActivity : AppCompatActivity() {
                     remove(KEY_BACKUP_SCALE)
                     remove(KEY_BACKUP_FIT)
                     remove(KEY_BACKUP_ROTATION)
+                    remove(KEY_BACKUP_POSITION)
+                    remove(KEY_BACKUP_DEFAULT_POSITION)
                 }
             }
         }.onFailure {
@@ -3828,6 +3896,8 @@ class MainActivity : AppCompatActivity() {
             val scaleBeforeCancel: Boolean
             val fitBeforeCancel: Boolean
             val rotationCsvBeforeCancel: String
+            val positionCsvBeforeCancel: String
+            val defaultPositionBeforeCancel: Int
 
             withContext(Dispatchers.IO) {
                 val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
@@ -3849,6 +3919,8 @@ class MainActivity : AppCompatActivity() {
                     scaleBeforeCancel = prefs.getBoolean(KEY_BACKUP_SCALE, false)
                     fitBeforeCancel = prefs.getBoolean(KEY_BACKUP_FIT, false)
                     rotationCsvBeforeCancel = prefs.getString(KEY_BACKUP_ROTATION, "") ?: ""
+                    positionCsvBeforeCancel = prefs.getString(KEY_BACKUP_POSITION, "") ?: ""
+                    defaultPositionBeforeCancel = prefs.getInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
                 }
             }
 
@@ -3927,6 +3999,9 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         IntArray(0)
                     }
+
+                    sourcePosition = positionCsvBeforeCancel.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+                    defaultPosition = validPosition(defaultPositionBeforeCancel)
 
                     suppressNup = prevSuppressNup
                 }.onFailure {
@@ -4158,7 +4233,7 @@ class MainActivity : AppCompatActivity() {
 
                         val imagePdf = createTempPdfFromImageFile(tempSrc)
                         try {
-                            appendPdfToSourceTemp(imagePdf, null)
+                            appendPdfToSourceTemp(listOf(imagePdf), null)
                         } finally {
                             runCatching { imagePdf.delete() }.onFailure {
 
@@ -4167,16 +4242,21 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         var passwordBytes: ByteArray? = null
                         var attempt = 0
+                        var openFailure: Exception? = null
 
                         while (true) {
                             val canOpen = try {
-                                PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { }
-                                true
+                                val encrypted = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { it.reader.isEncrypted }
+                                !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                if (!isBadPassword(e)) throw e
-                                false
+                                if (isBadPassword(e)) {
+                                    false
+                                } else {
+                                    openFailure = e
+                                    true
+                                }
                             }
 
                             if (canOpen) break
@@ -4203,7 +4283,7 @@ class MainActivity : AppCompatActivity() {
                             lockScreenOrientation()
                         }
 
-                        appendPdfToSourceTemp(tempSrc, passwordBytes)
+                        appendPdfToSourceTempOrRepair(tempSrc, passwordBytes, openFailure) { ensureActive() }
                     }
 
                     runCatching { tempSrc.delete() }
@@ -4540,7 +4620,7 @@ class MainActivity : AppCompatActivity() {
             val panel = binding.overlayDialogPasswordPanel
 
             panel.removeAllViews()
-            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password, panel, false)
+            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_password, panel, false)
             panel.addView(dialogView)
 
             overlay.visibility = View.VISIBLE
@@ -4664,7 +4744,7 @@ class MainActivity : AppCompatActivity() {
         return if (v != null && v > 0) v else 1
     }
 
-    private fun appendPdfToSourceTemp(srcPdf: File, passwordBytes: ByteArray? = null) {
+    private fun appendPdfToSourceTemp(srcPdfs: List<File>, passwordBytes: ByteArray? = null) {
 
         val outWork = sourceWorkFile()
         if (outWork.exists()) outWork.delete()
@@ -4701,7 +4781,7 @@ class MainActivity : AppCompatActivity() {
 
             val sourceTemp = sourceTempFile()
             if (sourceTemp.exists()) copyInBatches(sourceTemp.absolutePath, null)
-            copyInBatches(srcPdf.absolutePath, passwordBytes)
+            for (srcPdf in srcPdfs) copyInBatches(srcPdf.absolutePath, passwordBytes)
         }
 
         val target = sourceTempFile()
@@ -4714,6 +4794,33 @@ class MainActivity : AppCompatActivity() {
             sourceRotation = IntArray(newTotal)
             oldRotation.copyInto(sourceRotation)
         }
+        ensurePositionSize(newTotal)
+    }
+
+    private fun appendPdfToSourceTempOrRepair(
+        srcPdf: File,
+        passwordBytes: ByteArray?,
+        openFailure: Exception?,
+        ensureActive: () -> Unit
+    ) {
+        val failure = openFailure ?: try {
+            appendPdfToSourceTemp(listOf(srcPdf), passwordBytes)
+            return
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+
+        ensureActive()
+        val repaired = PdfMuPdfRepair.withRepairedParts(
+            input = srcPdf,
+            password = passwordBytes,
+            workDir = cacheDir,
+            batchSize = batchValueOrDefault1(),
+            ensureActive = ensureActive
+        ) { parts -> appendPdfToSourceTemp(parts, null) }
+        if (!repaired) throw failure
     }
 
     private fun addEmptyPageToSource() {
@@ -4805,6 +4912,7 @@ class MainActivity : AppCompatActivity() {
                     sourceRotation = IntArray(newTotal)
                     oldRotation.copyInto(sourceRotation)
                 }
+                ensurePositionSize(newTotal)
 
                 createTempPdfInternal()
 
@@ -5430,8 +5538,10 @@ class MainActivity : AppCompatActivity() {
                 outWork.renameTo(srcFile)
 
                 val newRotation = IntArray(totalSrcPages)
+                val newPosition = IntArray(totalSrcPages) { DEFAULT_POSITION }
                 var destIndex = 0
                 val oldRotation = sourceRotation.copyOf()
+                val oldPosition = sourcePosition.copyOf()
                 ordered.forEach { item ->
                     val originalPlpIndex = item.pageIndex
                     val start = originalPlpIndex * per
@@ -5439,12 +5549,14 @@ class MainActivity : AppCompatActivity() {
                     if (start < totalSrcPages) {
                         for (i in start..end) {
                             if (destIndex < newRotation.size) {
+                                newPosition[destIndex] = validPosition(oldPosition.getOrElse(i) { defaultPosition })
                                 newRotation[destIndex++] = oldRotation.getOrElse(i) { 0 }
                             }
                         }
                     }
                 }
                 sourceRotation = newRotation
+                sourcePosition = newPosition
 
                 createTempPdfInternal()
 
@@ -5571,6 +5683,178 @@ class MainActivity : AppCompatActivity() {
         job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
+    private val positionIcons = intArrayOf(
+        R.drawable.ic_position_00_24,
+        R.drawable.ic_position_01_24,
+        R.drawable.ic_position_02_24,
+        R.drawable.ic_position_03_24,
+        R.drawable.ic_position_04_24,
+        R.drawable.ic_position_05_24,
+        R.drawable.ic_position_06_24,
+        R.drawable.ic_position_07_24,
+        R.drawable.ic_position_08_24,
+        R.drawable.ic_position_09_24
+    )
+
+    private fun validPosition(position: Int): Int = if (position in 1..9) position else DEFAULT_POSITION
+
+    private fun horizontalPositionFactor(position: Int): Float = ((position - 1) % 3) * 0.5f
+
+    private fun verticalPositionFactor(position: Int): Float = (2 - (position - 1) / 3) * 0.5f
+
+    private fun ensurePositionSize(total: Int) {
+        if (sourcePosition.size == total) return
+        val old = sourcePosition
+        sourcePosition = IntArray(total) { index -> validPosition(old.getOrElse(index) { defaultPosition }) }
+    }
+
+    private fun positionsOfPlpIndices(plpIndices: List<Int>): Set<Int> {
+        if (plpIndices.isEmpty()) return emptySet()
+        val per = perGroup()
+        val positions = HashSet<Int>()
+        for (plpIndex in plpIndices) {
+            val start = plpIndex * per
+            if (start >= sourcePosition.size) {
+                positions.add(defaultPosition)
+                continue
+            }
+            val end = min(sourcePosition.size, start + per)
+            for (i in start until end) positions.add(validPosition(sourcePosition[i]))
+        }
+        return positions
+    }
+
+    private fun positionIcon(positions: Set<Int>): Int = when {
+        positions.isEmpty() -> positionIcons[defaultPosition]
+        positions.size > 1 -> R.drawable.ic_position_10_24
+        else -> positionIcons[positions.first()]
+    }
+
+    private fun showPositionDialog(plpIndices: List<Int>, fromMainWindow: Boolean) {
+        if (plpIndices.isEmpty()) return
+
+        val overlay = binding.overlayDialogPositionOnPage
+        val panel = binding.overlayDialogPositionOnPagePanel
+
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_position_on_page, panel, false)
+        panel.addView(dialogView)
+
+        overlay.visibility = View.VISIBLE
+
+        fun close() {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
+
+        overlay.setOnClickListener { close() }
+        panel.setOnClickListener {
+        }
+
+        val current = positionsOfPlpIndices(plpIndices).singleOrNull()
+        var selected = current
+        val grid = dialogView.findViewById<AppCompatImageView>(R.id.ponp_grid)
+        val btnOk = dialogView.findViewById<Button>(R.id.ponp_btn_ok)
+        val btnCancel = dialogView.findViewById<Button>(R.id.ponp_btn_cancel)
+
+        fun render() {
+            grid.setImageResource(selected?.let { positionIcons[it] } ?: R.drawable.ic_position_00_24)
+            btnOk.isEnabled = selected != null && selected != current
+        }
+
+        intArrayOf(
+            R.id.ponp_cell_1, R.id.ponp_cell_2, R.id.ponp_cell_3,
+            R.id.ponp_cell_4, R.id.ponp_cell_5, R.id.ponp_cell_6,
+            R.id.ponp_cell_7, R.id.ponp_cell_8, R.id.ponp_cell_9
+        ).forEachIndexed { index, id ->
+            dialogView.findViewById<View>(id).setOnClickListener {
+                selected = index + 1
+                render()
+            }
+        }
+        render()
+
+        btnCancel.setOnClickListener { close() }
+
+        btnOk.setOnClickListener {
+            val target = selected ?: return@setOnClickListener
+            close()
+            updatePositionForPlpIndices(plpIndices, target, "position:$target")
+            if (fromMainWindow) defaultPosition = target
+        }
+    }
+
+    private fun updatePositionForPlpIndices(plpIndices: List<Int>, position: Int, resetKey: String) {
+        val total = sourceTempPageCount()
+        if (total <= 0) return
+
+        showInProgress(getString(R.string.in_progress_position))
+        lockScreenOrientation()
+
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val selectedIdxBefore = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+
+        val job = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val per = perGroup()
+                ensurePositionSize(total)
+
+                for (plpIndex in plpIndices) {
+                    val groupStart = plpIndex * per
+                    val groupEnd = min(total - 1, groupStart + per - 1)
+                    if (groupStart <= groupEnd) {
+                        for (i in groupStart..groupEnd) {
+                            sourcePosition[i] = position
+                        }
+                    }
+                }
+
+                createTempPdfInternal()
+
+                withContext(Dispatchers.Main) {
+                    resetThumbDocKey(resetKey)
+
+                    val onReloadStarted: () -> Unit = {
+                        hideInProgressIfShown()
+                        unlockScreenOrientation()
+                    }
+
+                    reloadThumbnailsFromPlp(
+                        targetIndex = null,
+                        targetOffsetPx = 0,
+                        restorePrevious = true,
+                        indicesToSelect = selectedIdxBefore.toSet(),
+                        releaseUiAtStart = false,
+                        onStarted = onReloadStarted
+                    )
+
+                    updateButtonsState()
+                }
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_position_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
+                    hideInProgressIfShown()
+                    unlockScreenOrientation()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    unlockScreenOrientation()
+                }
+            }
+        }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
+    }
+
     private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
         val total = sourceTempPageCount()
         if (total <= 0) return
@@ -5600,6 +5884,7 @@ class MainActivity : AppCompatActivity() {
                 if (sourceRotation.size != totalBefore) {
                     sourceRotation = IntArray(totalBefore)
                 }
+                ensurePositionSize(totalBefore)
 
                 val groupStart = plpIndex * per
                 val groupEnd = min(total - 1, groupStart + per - 1)
@@ -5609,6 +5894,7 @@ class MainActivity : AppCompatActivity() {
                 if (remaining <= 0) {
                     clearCacheDir()
                     sourceRotation = IntArray(0)
+                    sourcePosition = IntArray(0)
 
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
@@ -5679,6 +5965,7 @@ class MainActivity : AppCompatActivity() {
                 outWork.renameTo(source)
 
                 val newRotationList = sourceRotation.toMutableList()
+                val newPositionList = sourcePosition.toMutableList()
                 val groupStartIdx = plpIndex * per
                 val groupEndIdx = min(totalBefore - 1, groupStartIdx + per - 1)
                 if (groupStartIdx <= groupEndIdx) {
@@ -5686,9 +5973,13 @@ class MainActivity : AppCompatActivity() {
                         if (i < newRotationList.size) {
                             newRotationList.removeAt(i)
                         }
+                        if (i < newPositionList.size) {
+                            newPositionList.removeAt(i)
+                        }
                     }
                 }
                 sourceRotation = newRotationList.toIntArray()
+                sourcePosition = newPositionList.toIntArray()
 
                 createTempPdfInternal()
 
@@ -5757,6 +6048,7 @@ class MainActivity : AppCompatActivity() {
                 if (sourceRotation.size != totalBefore) {
                     sourceRotation = IntArray(totalBefore)
                 }
+                ensurePositionSize(totalBefore)
 
                 val toSkip = HashSet<Int>().apply {
                     for (pi in selectedPlp) {
@@ -5770,6 +6062,7 @@ class MainActivity : AppCompatActivity() {
                 if (remaining <= 0) {
                     clearCacheDir()
                     sourceRotation = IntArray(0)
+                    sourcePosition = IntArray(0)
 
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
@@ -5847,6 +6140,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val newRotation = sourceRotation.filterIndexed { index, _ -> !toSkipIndices.contains(index) }
                 sourceRotation = newRotation.toIntArray()
+                sourcePosition = sourcePosition.filterIndexed { index, _ -> !toSkipIndices.contains(index) }.toIntArray()
 
                 createTempPdfInternal()
 
@@ -6531,7 +6825,7 @@ class MainActivity : AppCompatActivity() {
             val panel = binding.overlayDialogPasswordPanel
 
             panel.removeAllViews()
-            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password, panel, false)
+            val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_password, panel, false)
             panel.addView(dialogView)
 
             overlay.visibility = View.VISIBLE
@@ -6710,6 +7004,7 @@ class MainActivity : AppCompatActivity() {
             if (sourceRotation.size != totalSrcPages) {
                 sourceRotation = IntArray(totalSrcPages)
             }
+            ensurePositionSize(totalSrcPages)
 
             val marginPt = marginMm * 72f / 25.4f
             val per      = (rows * cols).coerceAtLeast(1)
@@ -6887,8 +7182,9 @@ class MainActivity : AppCompatActivity() {
                             val rotatedScaledW = if (isSideways) scaledH else scaledW
                             val rotatedScaledH = if (isSideways) scaledW else scaledH
 
-                            val offsetX = cellX + (cellW - rotatedScaledW) / 2
-                            val offsetY = cellY + (cellH - rotatedScaledH) / 2
+                            val position = validPosition(sourcePosition.getOrElse(globalIdx) { DEFAULT_POSITION })
+                            val offsetX = cellX + (cellW - rotatedScaledW) * horizontalPositionFactor(position)
+                            val offsetY = cellY + (cellH - rotatedScaledH) * verticalPositionFactor(position)
 
                             val a: Double
                             val b: Double
@@ -7756,6 +8052,7 @@ class MainActivity : AppCompatActivity() {
                     if (start < totalPages) {
                         for (i in start..end) {
                             sourceRotation[i] = 0
+                            if (i < sourcePosition.size) sourcePosition[i] = DEFAULT_POSITION
                         }
                     }
                 }
@@ -8036,7 +8333,7 @@ class MainActivity : AppCompatActivity() {
                 KEY_NORMAL_COLUMNS, KEY_LABEL_COLUMNS,
                 KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
                 KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
-                KEY_NORMAL_FIT, KEY_LABEL_FIT,
+                KEY_NORMAL_FIT, KEY_LABEL_FIT, KEY_NORMAL_POSITION, KEY_LABEL_POSITION,
                 KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
                 KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
                 KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,
@@ -8102,7 +8399,7 @@ class MainActivity : AppCompatActivity() {
             KEY_NORMAL_COLUMNS, KEY_LABEL_COLUMNS,
             KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
             KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
-            KEY_NORMAL_FIT, KEY_LABEL_FIT,
+            KEY_NORMAL_FIT, KEY_LABEL_FIT, KEY_NORMAL_POSITION, KEY_LABEL_POSITION,
             KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
             KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
             KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,
@@ -8232,6 +8529,7 @@ class MainActivity : AppCompatActivity() {
                     putInt(KEY_THEME_RESTORE_OFFSET, offset)
                     putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
                     putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
+                    putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
                     putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
                 }
             }

@@ -6,6 +6,10 @@ app/build/
 .externalNativeBuild/
 .cxx/
 app/release/
+.checkpoints/
+.agents/
+.claude/
+.codex/
 
 # Local config
 local.properties

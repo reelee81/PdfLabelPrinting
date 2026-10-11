@@ -560,31 +560,50 @@
                             android:background="@null"
                             android:scaleType="center"
                             android:contentDescription="@null"
-                            android:layout_marginLeft="@dimen/dp_32"
-                            android:layout_marginRight="@dimen/dp_32"
+                            android:layout_marginLeft="@dimen/dp_20"
                             app:srcCompat="@drawable/ic_start_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_rotate_all_color"
+                            app:tint="@color/ic_delete_rotate_position_all_color"
                             app:layout_constraintLeft_toRightOf="@id/all_select"
-                            app:layout_constraintRight_toLeftOf="@+id/rotate_left_select"
+                            app:layout_constraintRight_toLeftOf="@+id/position_select"
                             app:layout_constraintTop_toTopOf="parent"
                             app:layout_constraintBottom_toBottomOf="parent"
                             app:layout_constraintHorizontal_weight="1"
                             app:layout_constraintHorizontal_chainStyle="spread" />
 
                         <androidx.appcompat.widget.AppCompatImageButton
-                            android:id="@+id/rotate_left_select"
-                            android:layout_width="@dimen/dp_32"
+                            android:id="@+id/position_select"
+                            android:layout_width="0dp"
                             android:layout_height="@dimen/dp_32"
                             android:background="@null"
+                            android:scaleType="center"
                             android:contentDescription="@null"
+                            android:layout_marginLeft="@dimen/dp_20"
+                            app:srcCompat="@drawable/ic_position_00_24"
+                            app:tintMode="src_in"
+                            app:tint="@color/ic_delete_rotate_position_all_color"
+                            app:layout_constraintLeft_toRightOf="@id/list_start"
+                            app:layout_constraintRight_toLeftOf="@+id/rotate_left_select"
+                            app:layout_constraintTop_toTopOf="parent"
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1" />
+
+                        <androidx.appcompat.widget.AppCompatImageButton
+                            android:id="@+id/rotate_left_select"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/dp_32"
+                            android:background="@null"
+                            android:scaleType="center"
+                            android:contentDescription="@null"
+                            android:layout_marginLeft="@dimen/dp_20"
                             app:srcCompat="@drawable/ic_rotate_left_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_rotate_all_color"
-                            app:layout_constraintLeft_toRightOf="@id/list_start"
+                            app:tint="@color/ic_delete_rotate_position_all_color"
+                            app:layout_constraintLeft_toRightOf="@id/position_select"
                             app:layout_constraintRight_toLeftOf="@+id/list_end"
                             app:layout_constraintTop_toTopOf="parent"
-                            app:layout_constraintBottom_toBottomOf="parent"/>
+                            app:layout_constraintBottom_toBottomOf="parent"
+                            app:layout_constraintHorizontal_weight="1" />
 
                         <androidx.appcompat.widget.AppCompatImageButton
                             android:id="@+id/list_end"
@@ -593,11 +612,11 @@
                             android:background="@null"
                             android:scaleType="center"
                             android:contentDescription="@null"
-                            android:layout_marginLeft="@dimen/dp_32"
-                            android:layout_marginRight="@dimen/dp_32"
+                            android:layout_marginLeft="@dimen/dp_20"
+                            android:layout_marginRight="@dimen/dp_20"
                             app:srcCompat="@drawable/ic_end_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_rotate_all_color"
+                            app:tint="@color/ic_delete_rotate_position_all_color"
                             app:layout_constraintLeft_toRightOf="@+id/rotate_left_select"
                             app:layout_constraintRight_toLeftOf="@id/delete_select"
                             app:layout_constraintTop_toTopOf="parent"
@@ -612,10 +631,10 @@
                             android:contentDescription="@null"
                             app:srcCompat="@drawable/ic_delete_24"
                             app:tintMode="src_in"
-                            app:tint="@color/ic_delete_rotate_all_color"
+                            app:tint="@color/ic_delete_rotate_position_all_color"
                             app:layout_constraintRight_toRightOf="parent"
                             app:layout_constraintTop_toTopOf="parent"
-                            app:layout_constraintBottom_toBottomOf="parent"/>
+                            app:layout_constraintBottom_toBottomOf="parent" />
                     </androidx.constraintlayout.widget.ConstraintLayout>
 
                     <androidx.recyclerview.widget.RecyclerView
@@ -661,7 +680,7 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
 
-            <include layout="@layout/dialog_password" />
+            <include layout="@layout/dialog_pdf_password" />
         </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 
@@ -782,6 +801,36 @@
             app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
 
             <include layout="@layout/dialog_battery_optimization" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/overlay_dialog_position_on_page"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dialog_overlay_background_color"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="@dimen/dp_9999_overlay"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16">
+
+        <LinearLayout
+            android:id="@+id/overlay_dialog_position_on_page_panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_overlay_dialog_panel"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
+
+            <include layout="@layout/dialog_position_on_page" />
         </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 

@@ -5,8 +5,6 @@ import com.itextpdf.io.font.PdfEncodings
 import com.itextpdf.io.source.PdfTokenizer
 import com.itextpdf.io.source.RandomAccessFileOrArray
 import com.itextpdf.io.source.RandomAccessSourceFactory
-import com.itextpdf.kernel.colors.Color
-import com.itextpdf.kernel.colors.ColorConstants
 import com.itextpdf.kernel.geom.Rectangle
 import com.itextpdf.kernel.pdf.IPdfPageExtraCopier
 import com.itextpdf.kernel.pdf.PdfArray
@@ -22,19 +20,22 @@ import com.itextpdf.kernel.pdf.PdfString
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
-import com.itextpdf.kernel.pdf.extgstate.PdfExtGState
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
 import java.io.File
 import java.io.IOException
-import kotlin.math.ceil
-import kotlin.math.hypot
-import kotlin.math.max
 
 internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPageExtraCopier {
     override fun copy(fromPage: PdfPage, toPage: PdfPage) {
-        PdfCopySupport.repairInvalidBoxes(toPage)
+        val visible = PdfCopySupport.repairInvalidBoxes(toPage)
+        PdfCopySupport.repairContents(toPage)
         PdfIdentityCMapRepair.repair(toPage)
-        val annotations = fromPage.pdfObject.getAsArray(PdfName.Annots) ?: return
+        val optionalContent = optionalContentFor(fromPage.document)
+        if (visible) optionalContent?.filterPage(fromPage, toPage)
+        val annotations = fromPage.pdfObject.getAsArray(PdfName.Annots)
+        if (!visible || annotations == null) {
+            toPage.pdfObject.remove(PdfName.Annots)
+            return
+        }
         var canvas: PdfCanvas? = null
         fun contentCanvas(): PdfCanvas = canvas ?: PdfCanvas(toPage, true).also { canvas = it }
 
@@ -42,26 +43,32 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
             for (index in 0 until annotations.size()) {
                 val annotation = annotations.getAsDictionary(index) ?: continue
                 val subtype = annotation.getAsName(PdfName.Subtype)
-                if (subtype == PdfName.Text || subtype == PdfName.Popup || subtype == PdfName.Link) continue
+                if (subtype == PdfName.Popup || subtype == PdfName.Link) continue
+                if (optionalContent?.isHidden(annotation.getAsDictionary(PdfName.OC)) == true) continue
                 val flags = annotation.getAsNumber(PdfName.F)?.intValue() ?: 0
-                if (flags and (1 or 2 or 32) != 0) continue
+                if (flags and FLAG_INVISIBLE != 0 && subtype !in standardSubtypes) continue
+                val printable = flags and FLAG_PRINT != 0
+                val hidden = flags and FLAG_HIDDEN != 0
+                if (hidden && !printable) continue
+                if (subtype != PdfName.Widget && !printable) continue
                 val rect = annotation.getAsArray(PdfName.Rect)?.toRectangle() ?: continue
                 if (!validRectangle(rect)) continue
 
                 val appearance = normalAppearance(annotation)
-                val fieldType = if (subtype == PdfName.Widget) inherited(annotation, PdfName.FT) else null
                 if (appearance != null) {
                     drawAppearance(appearance, rect, contentCanvas(), toPage.document, subtype == PdfName.Widget)
-                } else if (subtype == PdfName.Widget) {
+                } else if (subtype == PdfName.Widget && printable && !hidden) {
                     val normal = annotation.getAsDictionary(PdfName.AP)?.getAsDictionary(PdfName.N)
                     if (normal?.get(appearanceState(annotation, normal)) is PdfName) continue
+                    val fieldType = inherited(annotation, PdfName.FT)
+                    val fieldFlags = (inherited(annotation, PdfName.Ff) as? PdfNumber)?.intValue() ?: 0
+                    if (fieldType == PdfName.Btn && fieldFlags and FIELD_PUSHBUTTON != 0) continue
                     if (fieldType == PdfName.Tx || fieldType == PdfName.Btn || fieldType == PdfName.Ch) {
-                        drawGeneratedWidget(annotation, fromPage.document, rect, contentCanvas(), toPage.document)
+                        try {
+                            drawGeneratedWidget(annotation, fromPage.document, rect, contentCanvas(), toPage.document)
+                        } catch (_: Exception) {
+                        }
                     }
-                } else if (subtype == PdfName.Highlight || subtype == PdfName.Underline ||
-                    subtype == PdfName.StrikeOut || subtype == PdfName.Squiggly
-                ) {
-                    drawTextMarkup(annotation, rect, contentCanvas())
                 }
             }
         } finally {
@@ -69,6 +76,17 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
         }
 
         toPage.pdfObject.remove(PdfName.Annots)
+    }
+
+    private var optionalContentSource: PdfDocument? = null
+    private var cachedOptionalContent: PdfOptionalContentFilter? = null
+
+    private fun optionalContentFor(document: PdfDocument): PdfOptionalContentFilter? {
+        if (optionalContentSource !== document) {
+            optionalContentSource = document
+            cachedOptionalContent = PdfOptionalContentFilter.of(document)
+        }
+        return cachedOptionalContent
     }
 
     private fun normalAppearance(annotation: PdfDictionary): PdfStream? {
@@ -198,66 +216,6 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
         if (fonts.size() > 0) defaults.put(PdfName.DR, PdfDictionary().apply { put(PdfName.Font, fonts) })
     }
 
-    private fun drawTextMarkup(annotation: PdfDictionary, rect: Rectangle, canvas: PdfCanvas) {
-        val subtype = annotation.getAsName(PdfName.Subtype)
-        val values = annotation.getAsArray(PdfName.QuadPoints)?.toFloatArray()
-            ?: floatArrayOf(rect.left, rect.top, rect.right, rect.top, rect.left, rect.bottom, rect.right, rect.bottom)
-        val colorValues = annotation.getAsArray(PdfName.C)?.toFloatArray()
-        val color = colorValues?.let { Color.createColorWithColorSpace(it) }
-            ?: if (subtype == PdfName.Highlight) ColorConstants.YELLOW else ColorConstants.BLACK
-        val opacity = (annotation.getAsNumber(PdfName.CA)?.floatValue() ?: 1f).coerceIn(0f, 1f)
-        val state = PdfExtGState().setFillOpacity(opacity).setStrokeOpacity(opacity)
-        if (subtype == PdfName.Highlight) state.blendMode = PdfExtGState.BM_MULTIPLY
-        canvas.saveState().setExtGState(state).setFillColor(color).setStrokeColor(color)
-        try {
-            for (offset in 0..values.size - 8 step 8) {
-                val quad = values.copyOfRange(offset, offset + 8)
-                if (quad.any { !it.isFinite() }) continue
-                val cross = (quad[2] - quad[0]) * (quad[5] - quad[1]) -
-                    (quad[3] - quad[1]) * (quad[4] - quad[0])
-                val q = if (cross > 0f) floatArrayOf(
-                    quad[6], quad[7], quad[4], quad[5], quad[0], quad[1], quad[2], quad[3]
-                ) else quad
-                if (subtype == PdfName.Highlight) {
-                    canvas.moveTo(q[0].toDouble(), q[1].toDouble())
-                        .lineTo(q[2].toDouble(), q[3].toDouble())
-                        .lineTo(q[6].toDouble(), q[7].toDouble())
-                        .lineTo(q[4].toDouble(), q[5].toDouble()).closePath().fill()
-                    continue
-                }
-                val height = hypot(q[0] - q[4], q[1] - q[5])
-                val thickness = max(0.5f, height / 12f)
-                val fraction = if (subtype == PdfName.StrikeOut) 0.5f else 0.1f
-                val startX = q[4] + (q[0] - q[4]) * fraction
-                val startY = q[5] + (q[1] - q[5]) * fraction
-                val endX = q[6] + (q[2] - q[6]) * fraction
-                val endY = q[7] + (q[3] - q[7]) * fraction
-                canvas.setLineWidth(thickness).moveTo(startX.toDouble(), startY.toDouble())
-                if (subtype == PdfName.Squiggly) {
-                    val length = hypot(endX - startX, endY - startY)
-                    if (length > 0f) {
-                        val steps = ceil(length / max(1f, thickness * 2f)).toInt().coerceIn(2, 4096)
-                        val nx = -(endY - startY) / length * thickness
-                        val ny = (endX - startX) / length * thickness
-                        for (step in 1..steps) {
-                            val t = step.toFloat() / steps
-                            val sign = if (step == steps) 0f else if (step % 2 == 0) -1f else 1f
-                            canvas.lineTo(
-                                (startX + (endX - startX) * t + nx * sign).toDouble(),
-                                (startY + (endY - startY) * t + ny * sign).toDouble()
-                            )
-                        }
-                    }
-                } else {
-                    canvas.lineTo(endX.toDouble(), endY.toDouble())
-                }
-                canvas.stroke()
-            }
-        } finally {
-            canvas.restoreState()
-        }
-    }
-
     private fun inherited(annotation: PdfDictionary, key: PdfName): PdfObject? {
         var current: PdfDictionary? = annotation
         val visited = HashSet<PdfDictionary>()
@@ -273,7 +231,17 @@ internal class PdfVisibleAppearanceCopier(private val cacheDir: File) : IPdfPage
             rect.width > 0f && rect.height > 0f
 
     private companion object {
+        const val FLAG_INVISIBLE = 1
+        const val FLAG_HIDDEN = 2
+        const val FLAG_PRINT = 4
+        const val FIELD_PUSHBUTTON = 1 shl 16
         val offState = PdfName("Off")
+        val standardSubtypes = setOf(
+            "Text", "Link", "FreeText", "Line", "Square", "Circle", "Polygon", "PolyLine", "Highlight",
+            "Underline", "Squiggly", "StrikeOut", "Caret", "Stamp", "Ink", "Popup", "FileAttachment",
+            "Sound", "Movie", "Screen", "Widget", "PrinterMark", "TrapNet", "Watermark", "3D", "Redact",
+            "Projection", "RichMedia"
+        ).map(::PdfName).toSet()
         val inheritedFieldKeys = arrayOf(
             PdfName.FT, PdfName.Ff, PdfName.V, PdfName.DV, PdfName.DA, PdfName.Q,
             PdfName.MaxLen, PdfName.Opt, PdfName.I, PdfName.TI, PdfName.DS, PdfName.RV

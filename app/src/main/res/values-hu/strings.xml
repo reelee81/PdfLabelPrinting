@@ -61,6 +61,7 @@
     <string name="in_progress_signing">Aláírás\u2026</string>
     <string name="in_progress_signature_editing">Aláírás szerkesztése\u2026</string>
     <string name="in_progress_rotation">Forgatás\u2026</string>
+    <string name="in_progress_position">Pozicionálás\u2026</string>
     <string name="in_progress_print">Nyomtatás\u2026</string>
     <string name="in_progress_send">Küldés\u2026</string>
     <string name="in_progress_save">Mentés\u2026</string>
@@ -83,6 +84,7 @@
     <string name="failed_to_add_empty_page_with_msg">Üres oldal hozzáadása sikertelen: %1$s</string>
     <string name="failed_to_delete_selected_groups_with_msg">A kijelölt csoportok törlése sikertelen: %1$s</string>
     <string name="failed_to_rotate_selected_groups_with_msg">A kijelölt csoportok forgatása sikertelen: %1$s</string>
+    <string name="failed_to_position_selected_groups_with_msg">A kijelölt csoportok pozicionálása sikertelen: %1$s</string>
     <string name="failed_to_delete_signature">Az aláírás törlése sikertelen</string>
     <string name="signature_image_invalid">Az aláírás képe nem található/érvénytelen</string>
     <string name="enter_value_0_100">Adj meg 0 és 100 közötti értéket (mm)</string>
@@ -129,6 +131,7 @@
     <string name="failed_to_rename_encrypted_pdf">A titkosított PDF átnevezése sikertelen</string>
     <string name="battery_optimization">Akkumulátor optimalizálás</string>
     <string name="battery_optimization_text">A hosszú PDF műveletek (1000+ oldal) miatt érdemes kikapcsolni az akku-optimalizálást az alkalmazásnál, különben a rendszer megállíthatja a feldolgozást, ha háttérbe teszed az appot vagy lezárod a kijelzőt. Különböző gyártóknál más-másféleképpen lehet ezt a beállítást elérni, de általában a Beállítások → Alkalmazások → Alkalmazások kezelése → Pdf Címkenyomtatás → Itt kell keresni az "Energiafogyasztás" vagy a "Akkumulátor" beállítási lehetőségeket, amelyeken belül ki/be kapcsolható. Ennek ellenére is előfordulhat, hogy a folyamat szüneteltetett állapotba kerül, mert egyes gyártók túl agresszívan kezelik az akkumulátor védelmet például lezárt kijelzőnél. Ezért ha biztosra akarsz menni, hogy a hosszú műveletek végigfussanak, maradj az app felületén, mert ilyenkor ébren tartja a kijelzőt a feldolgozási folyamat befejezéséig.</string>
+    <string name="position_on_page">Pozicionálás az oldal(ak)on</string>
     <string name="search_pdf">KERESÉS</string>
     <string name="edit_pdf">Szerkesztés</string>
     <string name="save_pdf_edits">MENTÉS</string>
