@@ -10,6 +10,7 @@ app/release/
 .agents/
 .claude/
 .codex/
+docs/
 
 # Local config
 local.properties

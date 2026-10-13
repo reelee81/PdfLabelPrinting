@@ -190,6 +190,9 @@ class MainActivity : AppCompatActivity() {
         const val KEY_POSITION = "position"
         const val KEY_NORMAL_POSITION = "normal_position"
         const val KEY_LABEL_POSITION = "label_position"
+        const val KEY_CROP = "crop"
+        const val KEY_NORMAL_CROP = "normal_crop"
+        const val KEY_LABEL_CROP = "label_crop"
         const val KEY_BATCH_PAGE = "batch_page"
         const val KEY_NORMAL_BATCH_PAGE = "normal_batch_page"
         const val KEY_LABEL_BATCH_PAGE = "label_batch_page"
@@ -212,6 +215,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_THEME_RESTORE_NSV_Y = "key_theme_restore_nsv_y"
         const val KEY_THEME_RESTORE_ROTATION_CSV = "key_theme_restore_rotation_csv"
         const val KEY_THEME_RESTORE_POSITION_CSV = "key_theme_restore_position_csv"
+        const val KEY_THEME_RESTORE_CROP = "key_theme_restore_crop"
         const val KEY_BACKUP_SELECTED = "backup_selected"
         const val KEY_BACKUP_THUMB_FIRST = "backup_thumb_first"
         const val KEY_BACKUP_THUMB_OFFSET = "backup_thumb_offset"
@@ -225,6 +229,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_BACKUP_ROTATION = "backup_rotation"
         const val KEY_BACKUP_POSITION = "backup_position"
         const val KEY_BACKUP_DEFAULT_POSITION = "backup_default_position"
+        const val KEY_BACKUP_CROP = "backup_crop"
         const val DEFAULT_SIG_POS_X_MM = 155
         const val DEFAULT_POSITION = 5
         const val DEFAULT_SIG_POS_Y_MM = 245
@@ -294,6 +299,8 @@ class MainActivity : AppCompatActivity() {
     private var sourceRotation: IntArray = IntArray(0)
     private var sourcePosition: IntArray = IntArray(0)
     private var defaultPosition: Int = DEFAULT_POSITION
+    private var sourceCrop: Map<Int, PdfCropRect> = emptyMap()
+    private var cropAllPages: Boolean = false
     private var restoreImeAfterBackground = false
     private var restoreImeAfterBackgroundEditTextId = View.NO_ID
     private var restoreImeAfterBackgroundWasActive = false
@@ -596,6 +603,7 @@ class MainActivity : AppCompatActivity() {
         viewModel = ViewModelProvider(this)[PageItemsViewModel::class.java]
         val pageItems = viewModel.pageItems
 
+        localizeDefaultFileNameTemplatesInPrefs()
         loadSettings()
 
         timeStamp = System.currentTimeMillis().toString()
@@ -711,6 +719,8 @@ class MainActivity : AppCompatActivity() {
             rotateLeftListener = { pos -> rotateLeftPlpPageGroupAndMirrorSource(pos) },
             positionListener = { pos -> showPositionDialog(listOf(pos), fromMainWindow = false) },
             positionIconFor = { pos -> positionIcon(positionsOfPlpIndices(listOf(pos))) },
+            cropListener = { pos -> showCropDialog(pos) },
+            isCroppedAt = { pos -> isPlpGroupCropped(pos) },
             clickListener = { position -> openPdfWithDriveOrOther(position) },
             selectionChanged = { _, _ -> updateButtonsState() }
         )
@@ -943,6 +953,10 @@ class MainActivity : AppCompatActivity() {
                 sourcePosition = positionCsv.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
             }
 
+            if (sp.contains(KEY_THEME_RESTORE_CROP)) {
+                sourceCrop = PdfCrops.decode(sp.getString(KEY_THEME_RESTORE_CROP, "") ?: "")
+            }
+
             val indicesToSelectPrefs: Set<Int>? = csv.split(',')
                 .mapNotNull { it.toIntOrNull() }
                 .toSet()
@@ -958,6 +972,7 @@ class MainActivity : AppCompatActivity() {
                         remove(KEY_THEME_RESTORE_SELECTED_CSV)
                         remove(KEY_THEME_RESTORE_ROTATION_CSV)
                         remove(KEY_THEME_RESTORE_POSITION_CSV)
+                        remove(KEY_THEME_RESTORE_CROP)
                         remove(KEY_THEME_RESTORE_NSV_Y)
                     }
                 }
@@ -1065,6 +1080,11 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
+                    if (binding.overlayDialogPdfCrop.isVisible) {
+                        binding.overlayDialogPdfCrop.performClick()
+                        return
+                    }
+
                     if (binding.overlayDialogMaxCoordinates.isVisible) {
                         binding.overlayDialogMaxCoordinates.performClick()
                         return
@@ -1161,6 +1181,7 @@ class MainActivity : AppCompatActivity() {
             binding.overlayDialogTimestampPanel,
             binding.overlayDialogBatteryOptimizationPanel,
             binding.overlayDialogPositionOnPagePanel,
+            binding.overlayDialogPdfCropPanel,
             binding.overlayDialogMaxCoordinatesPanel,
             binding.overlayProgressDialogPanel,
             binding.overlayProgressDialogUpdateUiPanel
@@ -1345,6 +1366,7 @@ class MainActivity : AppCompatActivity() {
                         putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
                         putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
                         putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
+                        putString(KEY_THEME_RESTORE_CROP, PdfCrops.encode(sourceCrop))
                         putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
                         putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
                     }
@@ -1586,7 +1608,10 @@ class MainActivity : AppCompatActivity() {
 
                         while (true) {
                             val canOpen = try {
-                                val encrypted = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { it.reader.isEncrypted }
+                                val (encrypted, pageCount) = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use {
+                                    it.reader.isEncrypted to it.numberOfPages
+                                }
+                                if (pageCount == 0) openFailure = IOException(getString(R.string.no_source_pages))
                                 !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
                             } catch (e: CancellationException) {
                                 throw e
@@ -1891,6 +1916,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRestoreInstanceState(savedInstanceState: Bundle) {
         super.onRestoreInstanceState(savedInstanceState)
+
+        val fileNameEt: EditText = findViewById(R.id.file_name)
+        val restored = fileNameEt.text?.toString().orEmpty()
+        val localized = localizeDefaultFileNameTemplate(restored, defaultFileNameTemplatesOfAllLanguages())
+        if (localized != restored) fileNameEt.setText(localized)
 
         window?.decorView?.post {
             try {
@@ -3197,6 +3227,9 @@ class MainActivity : AppCompatActivity() {
                 putInt(KEY_POSITION, DEFAULT_POSITION)
                 putInt(KEY_NORMAL_POSITION, DEFAULT_POSITION)
                 putInt(KEY_LABEL_POSITION, DEFAULT_POSITION)
+                putBoolean(KEY_CROP, false)
+                putBoolean(KEY_NORMAL_CROP, false)
+                putBoolean(KEY_LABEL_CROP, false)
                 putString(KEY_MARGIN, "0")
                 putString(KEY_NORMAL_MARGIN, "0")
                 putString(KEY_LABEL_MARGIN, "2")
@@ -3261,6 +3294,7 @@ class MainActivity : AppCompatActivity() {
                         putBoolean(KEY_NORMAL_SCALE, scale)
                         putBoolean(KEY_NORMAL_FIT, fit)
                         putInt(KEY_NORMAL_POSITION, defaultPosition)
+                        putBoolean(KEY_NORMAL_CROP, cropAllPages)
                         putString(KEY_NORMAL_BATCH_PAGE, batchVal)
                         putBoolean(KEY_NORMAL_PASSWORD_OUT, passwordOutChecked)
                         putString(KEY_NORMAL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3277,6 +3311,7 @@ class MainActivity : AppCompatActivity() {
                         putBoolean(KEY_LABEL_SCALE, scale)
                         putBoolean(KEY_LABEL_FIT, fit)
                         putInt(KEY_LABEL_POSITION, defaultPosition)
+                        putBoolean(KEY_LABEL_CROP, cropAllPages)
                         putString(KEY_LABEL_BATCH_PAGE, batchVal)
                         putBoolean(KEY_LABEL_PASSWORD_OUT, passwordOutChecked)
                         putString(KEY_LABEL_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3292,6 +3327,7 @@ class MainActivity : AppCompatActivity() {
                 putBoolean(KEY_SCALE, scale)
                 putBoolean(KEY_FIT, fit)
                 putInt(KEY_POSITION, defaultPosition)
+                putBoolean(KEY_CROP, cropAllPages)
                 putString(KEY_BATCH_PAGE, batchVal)
                 putBoolean(KEY_PASSWORD_OUT, passwordOutChecked)
                 putString(KEY_FILE_NAME_TEMPLATE, fileNameTemplate)
@@ -3316,6 +3352,7 @@ class MainActivity : AppCompatActivity() {
                 putBoolean(KEY_SCALE, scaleSwitch.isChecked)
                 putBoolean(KEY_FIT, fitSwitch.isChecked)
                 putInt(KEY_POSITION, defaultPosition)
+                putBoolean(KEY_CROP, cropAllPages)
                 putString(KEY_BATCH_PAGE, batchPage.text.toString())
                 putBoolean(KEY_PASSWORD_OUT, passwordOutCb.isChecked)
                 putString(KEY_FILE_NAME_TEMPLATE, fileNameEt.text?.toString() ?: "")
@@ -3349,6 +3386,7 @@ class MainActivity : AppCompatActivity() {
             scale = prefs.getBoolean(KEY_SCALE, false)
             fit = prefs.getBoolean(KEY_FIT, false)
             defaultPosition = validPosition(prefs.getInt(KEY_POSITION, DEFAULT_POSITION))
+            cropAllPages = prefs.getBoolean(KEY_CROP, false)
             batchVal = prefs.getString(KEY_BATCH_PAGE, "20") ?: "20"
             passwordOutChecked = prefs.getBoolean(KEY_PASSWORD_OUT, false)
         }
@@ -3409,6 +3447,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
+                localizeDefaultFileNameTemplatesInPrefs()
                 val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
                 synchronized(prefsBackupLock) {
                     when (type) {
@@ -3429,6 +3468,7 @@ class MainActivity : AppCompatActivity() {
                             "nlScale" to prefs.getBoolean(KEY_NORMAL_SCALE, false),
                             "nlFit" to prefs.getBoolean(KEY_NORMAL_FIT, false),
                             "nlPosition" to prefs.getInt(KEY_NORMAL_POSITION, DEFAULT_POSITION),
+                            "nlCrop" to prefs.getBoolean(KEY_NORMAL_CROP, false),
                             "nlBatchPage" to (prefs.getString(KEY_NORMAL_BATCH_PAGE, "20") ?: "20"),
                             "nlPasswordOut" to prefs.getBoolean(KEY_NORMAL_PASSWORD_OUT, false),
                             "nlFileNameTemplate" to (prefs.getString(
@@ -3454,6 +3494,7 @@ class MainActivity : AppCompatActivity() {
                             "nlScale" to prefs.getBoolean(KEY_LABEL_SCALE, true),
                             "nlFit" to prefs.getBoolean(KEY_LABEL_FIT, false),
                             "nlPosition" to prefs.getInt(KEY_LABEL_POSITION, DEFAULT_POSITION),
+                            "nlCrop" to prefs.getBoolean(KEY_LABEL_CROP, false),
                             "nlBatchPage" to (prefs.getString(KEY_LABEL_BATCH_PAGE, "20") ?: "20"),
                             "nlPasswordOut" to prefs.getBoolean(KEY_LABEL_PASSWORD_OUT, false),
                             "nlFileNameTemplate" to (prefs.getString(
@@ -3481,6 +3522,7 @@ class MainActivity : AppCompatActivity() {
             fitSwitch.isEnabled = scaleSwitch.isChecked
             defaultPosition = validPosition(data["nlPosition"] as Int)
             sourcePosition.fill(defaultPosition)
+            cropAllPages = data["nlCrop"] as Boolean
             batchPage.setText(data["nlBatchPage"] as String)
             passwordOutCb.isChecked = data["nlPasswordOut"] as Boolean
 
@@ -3503,6 +3545,34 @@ class MainActivity : AppCompatActivity() {
             if (regenRequestedDuringProfileLoad && plpTempFile().exists()) {
                 regenRequestedDuringProfileLoad = false
                 regeneratePlpAsyncAndReloadThumbnails()
+            }
+        }
+    }
+
+    private fun defaultFileNameTemplatesOfAllLanguages(): List<Pair<String, String>> =
+        listOf(Locale.ENGLISH, Locale.forLanguageTag("hu")).map { locale ->
+            val localized = createConfigurationContext(Configuration(resources.configuration).apply { setLocale(locale) })
+            localized.getString(R.string.default_tmpl_normal) to localized.getString(R.string.default_tmpl_label)
+        }
+
+    private fun localizeDefaultFileNameTemplate(value: String, defaults: List<Pair<String, String>>): String = when {
+        defaults.any { it.first == value } -> getString(R.string.default_tmpl_normal)
+        defaults.any { it.second == value } -> getString(R.string.default_tmpl_label)
+        else -> value
+    }
+
+    private fun localizeDefaultFileNameTemplatesInPrefs() {
+        val defaults = defaultFileNameTemplatesOfAllLanguages()
+        val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+        synchronized(prefsBackupLock) {
+            val changes = listOf(KEY_FILE_NAME_TEMPLATE, KEY_NORMAL_FILE_NAME_TEMPLATE, KEY_LABEL_FILE_NAME_TEMPLATE)
+                .mapNotNull { key ->
+                    val value = prefs.getString(key, null) ?: return@mapNotNull null
+                    val localized = localizeDefaultFileNameTemplate(value, defaults)
+                    if (localized != value) key to localized else null
+                }
+            if (changes.isNotEmpty()) {
+                prefs.edit { for ((key, value) in changes) putString(key, value) }
             }
         }
     }
@@ -3829,6 +3899,7 @@ class MainActivity : AppCompatActivity() {
                     remove(KEY_BACKUP_ROTATION)
                     remove(KEY_BACKUP_POSITION)
                     remove(KEY_BACKUP_DEFAULT_POSITION)
+                    remove(KEY_BACKUP_CROP)
 
                     putString(KEY_BACKUP_ROWS, cfg.rows.toString())
                     putString(KEY_BACKUP_COLUMNS, cfg.cols.toString())
@@ -3840,6 +3911,7 @@ class MainActivity : AppCompatActivity() {
                     putString(KEY_BACKUP_ROTATION, rotationCsv)
                     putString(KEY_BACKUP_POSITION, sourcePosition.joinToString(","))
                     putInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
+                    putString(KEY_BACKUP_CROP, PdfCrops.encode(sourceCrop))
                 }
             }
         }.onFailure {
@@ -3864,6 +3936,7 @@ class MainActivity : AppCompatActivity() {
                     remove(KEY_BACKUP_ROTATION)
                     remove(KEY_BACKUP_POSITION)
                     remove(KEY_BACKUP_DEFAULT_POSITION)
+                    remove(KEY_BACKUP_CROP)
                 }
             }
         }.onFailure {
@@ -3898,6 +3971,7 @@ class MainActivity : AppCompatActivity() {
             val rotationCsvBeforeCancel: String
             val positionCsvBeforeCancel: String
             val defaultPositionBeforeCancel: Int
+            val cropBeforeCancel: String
 
             withContext(Dispatchers.IO) {
                 val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
@@ -3921,6 +3995,7 @@ class MainActivity : AppCompatActivity() {
                     rotationCsvBeforeCancel = prefs.getString(KEY_BACKUP_ROTATION, "") ?: ""
                     positionCsvBeforeCancel = prefs.getString(KEY_BACKUP_POSITION, "") ?: ""
                     defaultPositionBeforeCancel = prefs.getInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
+                    cropBeforeCancel = prefs.getString(KEY_BACKUP_CROP, "") ?: ""
                 }
             }
 
@@ -4002,6 +4077,7 @@ class MainActivity : AppCompatActivity() {
 
                     sourcePosition = positionCsvBeforeCancel.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
                     defaultPosition = validPosition(defaultPositionBeforeCancel)
+                    sourceCrop = PdfCrops.decode(cropBeforeCancel)
 
                     suppressNup = prevSuppressNup
                 }.onFailure {
@@ -4246,7 +4322,10 @@ class MainActivity : AppCompatActivity() {
 
                         while (true) {
                             val canOpen = try {
-                                val encrypted = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use { it.reader.isEncrypted }
+                                val (encrypted, pageCount) = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use {
+                                    it.reader.isEncrypted to it.numberOfPages
+                                }
+                                if (pageCount == 0) openFailure = IOException(getString(R.string.no_source_pages))
                                 !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
                             } catch (e: CancellationException) {
                                 throw e
@@ -4820,7 +4899,24 @@ class MainActivity : AppCompatActivity() {
             batchSize = batchValueOrDefault1(),
             ensureActive = ensureActive
         ) { parts -> appendPdfToSourceTemp(parts, null) }
-        if (!repaired) throw failure
+        if (repaired) return
+
+        ensureActive()
+        val recovered = PdfRevisionRecovery.withEarlierRevision(
+            input = srcPdf,
+            workDir = cacheDir,
+            ensureActive = ensureActive,
+            isUsable = { revision ->
+                try {
+                    PdfDocument(rdr(revision.absolutePath, passwordBytes)).use { it.numberOfPages > 0 }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        ) { revision -> appendPdfToSourceTemp(listOf(revision), passwordBytes) }
+        if (!recovered) throw failure
     }
 
     private fun addEmptyPageToSource() {
@@ -5097,6 +5193,8 @@ class MainActivity : AppCompatActivity() {
         var releasedUiOnce = false
         var preDrawListener: ViewTreeObserver.OnPreDrawListener? = null
         var timeoutRunnable: Runnable? = null
+        var watchdogRunnable: Runnable? = null
+        var waitRange: IntRange? = null
         val pendingKeys = LinkedHashSet<String>()
 
         fun cleanupWaitersIfOwner() {
@@ -5115,8 +5213,13 @@ class MainActivity : AppCompatActivity() {
             }
             timeoutRunnable = null
 
+            watchdogRunnable?.let { r ->
+                binding.rvThumbnails.removeCallbacks(r)
+            }
+            watchdogRunnable = null
+
             if (myGen == reloadThumbnailsGeneration) {
-                runCatching { adapter.setOnThumbnailCachedListener(null) }
+                runCatching { adapter.setOnThumbnailFinishedListener(null) }
             }
 
             pendingKeys.clear()
@@ -5337,6 +5440,45 @@ class MainActivity : AppCompatActivity() {
                 }
                 binding.rvThumbnails.postDelayed(timeoutRunnable!!, 10 * 60 * 1000L)
 
+                val stallReleaseMs = 15_000L
+                val watchdogIntervalMs = 500L
+                var lastPendingCount = Int.MAX_VALUE
+                var lastProgressAt = System.currentTimeMillis()
+                watchdogRunnable = object : Runnable {
+                    override fun run() {
+                        if (isFinishing || isDestroyed || releasedUiOnce) return
+                        if (myGen != reloadThumbnailsGeneration) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                            return
+                        }
+                        val now = System.currentTimeMillis()
+                        val range = waitRange
+                        if (range == null) {
+                            binding.rvThumbnails.invalidate()
+                        } else {
+                            val it = pendingKeys.iterator()
+                            while (it.hasNext()) {
+                                if (adapter.isThumbnailCachedByKey(it.next())) it.remove()
+                            }
+                            if (pendingKeys.isEmpty()) {
+                                releaseDeferredUnlockAndInvokeOnStarted()
+                                return
+                            }
+                            if (pendingKeys.size < lastPendingCount) {
+                                lastPendingCount = pendingKeys.size
+                                lastProgressAt = now
+                            }
+                            adapter.prefetchAroundVisible(this@MainActivity, range)
+                        }
+                        if (now - lastProgressAt >= stallReleaseMs) {
+                            releaseDeferredUnlockAndInvokeOnStarted()
+                            return
+                        }
+                        binding.rvThumbnails.postDelayed(this, watchdogIntervalMs)
+                    }
+                }
+                binding.rvThumbnails.postDelayed(watchdogRunnable!!, watchdogIntervalMs)
+
                 preDrawListener = object : ViewTreeObserver.OnPreDrawListener {
                     override fun onPreDraw(): Boolean {
                         if (releasedUiOnce) return true
@@ -5369,6 +5511,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         val rangeToWait = start..end
+                        waitRange = rangeToWait
                         adapter.prefetchAroundVisible(this@MainActivity, rangeToWait)
 
                         pendingKeys.clear()
@@ -5389,9 +5532,9 @@ class MainActivity : AppCompatActivity() {
                             return true
                         }
 
-                        adapter.setOnThumbnailCachedListener { key ->
-                            if (releasedUiOnce) return@setOnThumbnailCachedListener
-                            if (myGen != reloadThumbnailsGeneration) return@setOnThumbnailCachedListener
+                        adapter.setOnThumbnailFinishedListener { key ->
+                            if (releasedUiOnce) return@setOnThumbnailFinishedListener
+                            if (myGen != reloadThumbnailsGeneration) return@setOnThumbnailFinishedListener
 
                             if (pendingKeys.remove(key)) {
                                 if (pendingKeys.isEmpty()) {
@@ -5539,6 +5682,7 @@ class MainActivity : AppCompatActivity() {
 
                 val newRotation = IntArray(totalSrcPages)
                 val newPosition = IntArray(totalSrcPages) { DEFAULT_POSITION }
+                val newToOld = IntArray(totalSrcPages) { -1 }
                 var destIndex = 0
                 val oldRotation = sourceRotation.copyOf()
                 val oldPosition = sourcePosition.copyOf()
@@ -5550,6 +5694,7 @@ class MainActivity : AppCompatActivity() {
                         for (i in start..end) {
                             if (destIndex < newRotation.size) {
                                 newPosition[destIndex] = validPosition(oldPosition.getOrElse(i) { defaultPosition })
+                                newToOld[destIndex] = i
                                 newRotation[destIndex++] = oldRotation.getOrElse(i) { 0 }
                             }
                         }
@@ -5557,6 +5702,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 sourceRotation = newRotation
                 sourcePosition = newPosition
+                sourceCrop = PdfCrops.afterReorder(sourceCrop, newToOld)
 
                 createTempPdfInternal()
 
@@ -5855,6 +6001,187 @@ class MainActivity : AppCompatActivity() {
         job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
+    private fun isPlpGroupCropped(plpIndex: Int): Boolean {
+        if (sourceCrop.isEmpty()) return false
+        val per = perGroup()
+        val start = plpIndex * per
+        return (start until start + per).any { it in sourceCrop }
+    }
+
+    private fun showCropDialog(plpIndex: Int) {
+        val firstSource = plpIndex * perGroup()
+
+        val overlay = binding.overlayDialogPdfCrop
+        val panel = binding.overlayDialogPdfCropPanel
+
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_crop, panel, false)
+        panel.addView(dialogView)
+
+        overlay.visibility = View.VISIBLE
+
+        var closed = false
+        fun close() {
+            closed = true
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+            panel.removeAllViews()
+        }
+
+        overlay.setOnClickListener { close() }
+        panel.setOnClickListener {
+        }
+
+        val cropScroll = dialogView.findViewById<NestedScrollView>(R.id.crop_scroll)
+        val cropView = dialogView.findViewById<PdfCropView>(R.id.crop_view)
+        val allPages = dialogView.findViewById<SwitchMaterial>(R.id.crop_all_pages)
+        val btnCancel = dialogView.findViewById<Button>(R.id.crop_btn_cancel)
+        val btnFull = dialogView.findViewById<Button>(R.id.crop_btn_full)
+        val btnOk = dialogView.findViewById<Button>(R.id.crop_btn_ok)
+
+        allPages.isChecked = cropAllPages
+        allPages.setOnCheckedChangeListener { _, checked -> cropAllPages = checked }
+
+        val rotation = sourceRotation.getOrElse(firstSource) { 0 }
+        val current = PdfCrops.toDisplay(sourceCrop[firstSource], rotation)
+        cropView.setFrame(current[0], current[1], current[2], current[3])
+
+        btnFull.isEnabled = false
+        btnOk.isEnabled = false
+        val previewSize = resources.displayMetrics.widthPixels
+        lifecycleScope.launch {
+            val preview = withContext(Dispatchers.IO) {
+                runCatching { renderCropPreview(firstSource, rotation, previewSize) }.getOrNull()
+            }
+            if (closed) return@launch
+            if (preview == null) {
+                close()
+                return@launch
+            }
+            cropView.setPage(preview)
+            cropScroll.post {
+                if (closed) return@post
+                var availW = cropScroll.width
+                if (availW <= 0) availW = dialogView.width
+                if (availW <= 0) availW = panel.width
+                if (availW <= 0) return@post
+                cropView.layoutParams = cropView.layoutParams.apply {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = max(1, (availW.toFloat() * preview.height / preview.width).toInt())
+                }
+            }
+            btnFull.isEnabled = true
+            btnOk.isEnabled = true
+        }
+
+        btnCancel.setOnClickListener { close() }
+        btnFull.setOnClickListener { cropView.resetFrame() }
+        btnOk.setOnClickListener {
+            val frame = cropView.frame()
+            val crop = PdfCrops.fromDisplay(frame.left, frame.top, frame.right, frame.bottom, rotation)
+            val applyToAll = allPages.isChecked
+            close()
+            updateCropForPlpGroup(plpIndex, crop, applyToAll)
+        }
+    }
+
+    @WorkerThread
+    private fun renderCropPreview(sourceIndex: Int, rotation: Int, maxSide: Int): Bitmap? {
+        val source = sourceTempFile()
+        if (!source.exists()) return null
+
+        val ownRotation = PdfDocument(rdr(source.absolutePath)).use { pdf ->
+            if (sourceIndex !in 0 until pdf.numberOfPages) return null
+            pdf.getPage(sourceIndex + 1).rotation
+        }
+
+        val rendered = ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            PdfRenderer(pfd).use { renderer ->
+                if (sourceIndex >= renderer.pageCount) return null
+                renderer.openPage(sourceIndex).use { page ->
+                    val scale = maxSide.coerceAtLeast(1).toFloat() / max(page.width, page.height).coerceAtLeast(1)
+                    val bitmap = createBitmap(
+                        (page.width * scale).toInt().coerceAtLeast(1),
+                        (page.height * scale).toInt().coerceAtLeast(1)
+                    )
+                    Canvas(bitmap).drawColor(Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bitmap
+                }
+            }
+        }
+
+        val turns = Math.floorMod(ownRotation / 90 + rotation, 4)
+        if (turns == 0) return rendered
+        val matrix = Matrix().apply { postRotate(-90f * turns) }
+        val rotated = Bitmap.createBitmap(rendered, 0, 0, rendered.width, rendered.height, matrix, true)
+        if (rotated !== rendered) rendered.recycle()
+        return rotated
+    }
+
+    private fun updateCropForPlpGroup(plpIndex: Int, crop: PdfCropRect?, applyToAll: Boolean) {
+        val total = sourceTempPageCount()
+        if (total <= 0) return
+
+        showInProgress(getString(R.string.in_progress_crop))
+        lockScreenOrientation()
+
+        val backupJob = lifecycleScope.launch {
+            backupSelectionState()
+        }
+        activeJobs.add(backupJob)
+        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+
+        val selectedIdxBefore = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+
+        val job = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val per = perGroup()
+                val groupStart = plpIndex * per
+                val indices = if (applyToAll) 0 until total else groupStart until min(total, groupStart + per)
+                sourceCrop = PdfCrops.withCrop(sourceCrop.filterKeys { it < total }, indices, crop)
+
+                createTempPdfInternal()
+
+                withContext(Dispatchers.Main) {
+                    resetThumbDocKey("crop")
+
+                    val onReloadStarted: () -> Unit = {
+                        hideInProgressIfShown()
+                        unlockScreenOrientation()
+                    }
+
+                    reloadThumbnailsFromPlp(
+                        targetIndex = null,
+                        targetOffsetPx = 0,
+                        restorePrevious = true,
+                        indicesToSelect = selectedIdxBefore.toSet(),
+                        releaseUiAtStart = false,
+                        onStarted = onReloadStarted
+                    )
+
+                    updateButtonsState()
+                }
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_crop_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
+                    hideInProgressIfShown()
+                    unlockScreenOrientation()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    unlockScreenOrientation()
+                }
+            }
+        }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
+    }
+
     private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
         val total = sourceTempPageCount()
         if (total <= 0) return
@@ -5895,6 +6222,7 @@ class MainActivity : AppCompatActivity() {
                     clearCacheDir()
                     sourceRotation = IntArray(0)
                     sourcePosition = IntArray(0)
+                    sourceCrop = emptyMap()
 
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
@@ -5980,6 +6308,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 sourceRotation = newRotationList.toIntArray()
                 sourcePosition = newPositionList.toIntArray()
+                if (groupStartIdx <= groupEndIdx) {
+                    sourceCrop = PdfCrops.afterRemoval(sourceCrop, (groupStartIdx..groupEndIdx).toSet())
+                }
 
                 createTempPdfInternal()
 
@@ -6063,6 +6394,7 @@ class MainActivity : AppCompatActivity() {
                     clearCacheDir()
                     sourceRotation = IntArray(0)
                     sourcePosition = IntArray(0)
+                    sourceCrop = emptyMap()
 
                     withContext(Dispatchers.Main) {
                         clearThumbnails()
@@ -6141,6 +6473,7 @@ class MainActivity : AppCompatActivity() {
                 val newRotation = sourceRotation.filterIndexed { index, _ -> !toSkipIndices.contains(index) }
                 sourceRotation = newRotation.toIntArray()
                 sourcePosition = sourcePosition.filterIndexed { index, _ -> !toSkipIndices.contains(index) }.toIntArray()
+                sourceCrop = PdfCrops.afterRemoval(sourceCrop, toSkipIndices)
 
                 createTempPdfInternal()
 
@@ -6409,7 +6742,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleEditedPdfFromViewer(uri: Uri) {
-        showInProgressUpdateUI(getString(R.string.in_progress_ui))
+        showInProgress(getString(R.string.in_progress_page_layout))
         lockScreenOrientation()
 
         val backupJob = lifecycleScope.launch {
@@ -6418,10 +6751,15 @@ class MainActivity : AppCompatActivity() {
         activeJobs.add(backupJob)
         backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
+        val selectedIdxBefore = viewModel.pageItems
+            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+
         val job = lifecycleScope.launch(Dispatchers.IO) {
+            val work = File(cacheDir, "${PLP_TEMP_NAME}.edited")
+            val projectedSource = File(cacheDir, "${SOURCE_TEMP_NAME}.edited")
             try {
-                val work = File(cacheDir, "${PLP_TEMP_NAME}.edited")
                 if (work.exists()) work.delete()
+                if (projectedSource.exists()) projectedSource.delete()
 
                 contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(work).use { output ->
@@ -6432,19 +6770,39 @@ class MainActivity : AppCompatActivity() {
 
                 PdfDocument(rdr(work.absolutePath)).use { }
 
-                val target = plpTempFile()
-                if (target.exists()) target.delete()
-                if (!work.renameTo(target)) {
-                    FileInputStream(work).use { input ->
-                        FileOutputStream(target).use { output ->
-                            input.copyTo(output)
-                            output.flush()
-                        }
-                    }
-                    work.delete()
+                val projected = try {
+                    PdfEditProjection.project(
+                        source = sourceTempFile(),
+                        editedPlp = work,
+                        output = projectedSource,
+                        batchSize = batchValueOrDefault1()
+                    ) { ensureActive() }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: PdfEditProjection.NotProjectableException) {
+                    -1
                 }
 
-                cleanupCacheExceptTemps()
+                when {
+                    projected > 0 -> {
+                        val source = sourceTempFile()
+                        if (source.exists()) source.delete()
+                        if (!projectedSource.renameTo(source)) throw IOException(getString(R.string.temporary_pdf_not_found))
+                        createTempPdfInternal()
+                    }
+                    projected < 0 -> {
+                        val target = plpTempFile()
+                        if (target.exists()) target.delete()
+                        if (!work.renameTo(target)) {
+                            FileInputStream(work).use { input ->
+                                FileOutputStream(target).use { output ->
+                                    input.copyTo(output)
+                                    output.flush()
+                                }
+                            }
+                        }
+                    }
+                }
 
                 withContext(Dispatchers.Main) {
                     resetThumbDocKey("pdfViewerEdit")
@@ -6452,9 +6810,10 @@ class MainActivity : AppCompatActivity() {
                         targetIndex = null,
                         targetOffsetPx = 0,
                         restorePrevious = true,
+                        indicesToSelect = selectedIdxBefore.toSet(),
                         releaseUiAtStart = false,
                         onStarted = {
-                            hideInProgressIfShownUpdateUI()
+                            hideInProgressIfShown()
                             unlockScreenOrientation()
                         }
                     )
@@ -6465,10 +6824,17 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShownUpdateUI()
+                    hideInProgressIfShown()
                     unlockScreenOrientation()
                 }
             } finally {
+                runCatching { work.delete() }
+                runCatching { projectedSource.delete() }
+                runCatching {
+                    cacheDir.listFiles()?.forEach { f ->
+                        if (f.name.startsWith("edited_") || f.name.startsWith("flattened_")) f.delete()
+                    }
+                }
                 withContext(Dispatchers.Main) {
                     unlockScreenOrientation()
                 }
@@ -6525,6 +6891,7 @@ class MainActivity : AppCompatActivity() {
                         val i = Intent(this@MainActivity, PdfViewer::class.java).apply {
                             putExtra(PdfViewer.EXTRA_URI, uri.toString())
                             putExtra(PdfViewer.EXTRA_INITIAL_PAGE_INDEX, initialPageIndex)
+                            putExtra(PdfViewer.EXTRA_BATCH_SIZE, batchValueOrDefault1())
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         pdfViewerLauncher.launch(i)
@@ -7047,10 +7414,12 @@ class MainActivity : AppCompatActivity() {
 
                         var idxLocal = 0
                         var globalIdx = srcStart
+                        val editCells = ArrayList<PdfEditProjection.Cell>()
                         while (globalIdx <= srcEnd) {
                             val page1Based = globalIdx + 1
                             val sp = src.getPage(page1Based)
-                            val sz = PdfCopySupport.visibleBox(sp)
+                            val pageBox = PdfCopySupport.visibleBox(sp)
+                            val sz = sourceCrop[globalIdx]?.applyTo(pageBox) ?: pageBox
 
                             var contentWidth  = sz.width
                             var contentHeight = sz.height
@@ -7074,8 +7443,9 @@ class MainActivity : AppCompatActivity() {
                             val rotation = sourceRotation.getOrElse(globalIdx) { 0 }
                             val isSideways = rotation == 1 || rotation == 3
 
-                            val srcPageW = if (isSideways) sz.height else sz.width
-                            val srcPageH = if (isSideways) sz.width else sz.height
+                            val scaleBox = if (scaleIndRequested) sz else pageBox
+                            val srcPageW = if (isSideways) scaleBox.height else scaleBox.width
+                            val srcPageH = if (isSideways) scaleBox.width else scaleBox.height
 
                             if (idxLocal % per == 0) {
                                 val psForThisPage =
@@ -7139,12 +7509,12 @@ class MainActivity : AppCompatActivity() {
                                             if (!orientationMismatch) {
                                                 min(scale, fitNoUpscale)
                                             } else {
-                                                val fitW = cellW / sz.width
-                                                val fitH = cellH / sz.height
+                                                val fitW = cellW / srcPageW
+                                                val fitH = cellH / srcPageH
                                                 val limitIsWidth = fitW <= fitH
                                                 val refW = if (srcIsPortrait) PageSize.A4.width else PageSize.A4.height
                                                 val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
-                                                val srcRel = if (limitIsWidth) (sz.width / refW) else (sz.height / refH)
+                                                val srcRel = if (limitIsWidth) (srcPageW / refW) else (srcPageH / refH)
                                                 val threshold = 0.5f
                                                 val preferFit = srcRel >= threshold
                                                 val candidate = if (preferFit) fitNoUpscale else scale
@@ -7158,6 +7528,7 @@ class MainActivity : AppCompatActivity() {
 
                             val fx  = sp.copyAsFormXObject(pdf)
                             fx.bBox = PdfArray(sz)
+                            runCatching { PdfEditProjection.tagLayerSource(fx, globalIdx) }
                             canvas.saveState()
 
                             val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
@@ -7229,6 +7600,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             PdfCopySupport.concatPlacementMatrix(canvas, a, b, c, d, e, f)
+                            editCells += PdfEditProjection.Cell(globalIdx, doubleArrayOf(a, b, c, d, e, f))
 
                             canvas.addXObjectWithTransformationMatrix(fx, 1f, 0f, 0f, 1f, 0f, 0f)
                             runCatching { fx.flush() }
@@ -7242,6 +7614,8 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             if (idxLocal % per == per - 1 || globalIdx == srcEnd) {
+                                runCatching { PdfEditProjection.markPlpPage(currentPage, editCells) }
+                                editCells.clear()
                                 runCatching { currentPage.flush() }
                             }
 
@@ -7996,10 +8370,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            var originalTotal = 0
             PdfDocument(PdfWriter(outWorkSrc.absolutePath, writerProps)).use { destSrcDoc ->
                 destSrcDoc.setFlushUnusedObjects(true)
 
                 val totalPages = PdfDocument(rdr(srcFile.absolutePath)).use { it.numberOfPages }
+                originalTotal = totalPages
                 val per = perGroup()
 
                 var p = 1
@@ -8044,19 +8420,16 @@ class MainActivity : AppCompatActivity() {
             outWorkSrc.renameTo(srcFile)
 
             val per = perGroup()
-            val totalPages = sourceTempPageCount()
-            if (sourceRotation.size == totalPages) {
-                signedMap.keys.forEach { plpIndex ->
-                    val start = plpIndex * per
-                    val end = min(totalPages - 1, start + per - 1)
-                    if (start < totalPages) {
-                        for (i in start..end) {
-                            sourceRotation[i] = 0
-                            if (i < sourcePosition.size) sourcePosition[i] = DEFAULT_POSITION
-                        }
-                    }
-                }
-            }
+            val signedStarts = signedMap.keys.map { it * per }.filter { it < originalTotal }
+            val mergedIntoSigned = PdfSignedGroups.mergedIndices(signedStarts, per, originalTotal)
+            sourceCrop = PdfCrops.afterRemoval(PdfCrops.withCrop(sourceCrop, signedStarts, null), mergedIntoSigned)
+            sourceRotation = PdfSignedGroups.afterMerge(
+                sourceRotation, originalTotal, signedStarts, mergedIntoSigned, signedValue = 0, missingValue = 0
+            )
+            sourcePosition = PdfSignedGroups.afterMerge(
+                sourcePosition, originalTotal, signedStarts, mergedIntoSigned,
+                signedValue = DEFAULT_POSITION, missingValue = defaultPosition
+            )
 
         } catch (_: Exception) {
 
@@ -8334,6 +8707,7 @@ class MainActivity : AppCompatActivity() {
                 KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
                 KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
                 KEY_NORMAL_FIT, KEY_LABEL_FIT, KEY_NORMAL_POSITION, KEY_LABEL_POSITION,
+                KEY_NORMAL_CROP, KEY_LABEL_CROP,
                 KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
                 KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
                 KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,
@@ -8400,6 +8774,7 @@ class MainActivity : AppCompatActivity() {
             KEY_NORMAL_BATCH_PAGE, KEY_LABEL_BATCH_PAGE,
             KEY_NORMAL_SCALE, KEY_LABEL_SCALE,
             KEY_NORMAL_FIT, KEY_LABEL_FIT, KEY_NORMAL_POSITION, KEY_LABEL_POSITION,
+            KEY_NORMAL_CROP, KEY_LABEL_CROP,
             KEY_NORMAL_MARGIN, KEY_LABEL_MARGIN,
             KEY_NORMAL_ORIENTATION, KEY_LABEL_ORIENTATION,
             KEY_NORMAL_DRAW_FRAME, KEY_LABEL_DRAW_FRAME,
@@ -8530,6 +8905,7 @@ class MainActivity : AppCompatActivity() {
                     putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
                     putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
                     putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
+                    putString(KEY_THEME_RESTORE_CROP, PdfCrops.encode(sourceCrop))
                     putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
                 }
             }

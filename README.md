@@ -13,6 +13,7 @@ modify it and learn from it.
 - Visual cropping / preview of pages and labels
 - Preparing labels for printing
 - Generating a modified PDF using iText Core for Android
+- Measuring page content bounds and repairing damaged PDFs using MuPDF
 
 (The detailed functionality is documented in the code itself; this README is intentionally short.)
 
@@ -68,10 +69,15 @@ The entire project (unless otherwise noted) is available under the terms of the
 - A summary of the license is contained in the `LICENSE` and `NOTICE` files.
 - The most important external dependencies and their licenses: `THIRD_PARTY_LICENSES.md`.
 
-**Important:** the application uses the iText Core for Android (9.x) library,
-which itself is available under AGPL-3.0 or a commercial license.  
+**Important:** the application uses the following libraries, which are themselves
+available under AGPL-3.0 or a commercial license:
+
+- **iText Core for Android (9.x)** – PDF processing and generation
+- **MuPDF (Android/Java bindings)** – content bounds measurement, repair of damaged PDFs
+  and password checking
+
 If the AGPL terms are not suitable for the given project,
-then you will need your own commercial iText license.
+then you will need your own commercial licenses (iText: Apryse, MuPDF: Artifex).
 
 
 ## Open source and publishing the source code

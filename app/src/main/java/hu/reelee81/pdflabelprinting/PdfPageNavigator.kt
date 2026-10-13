@@ -17,9 +17,12 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
     private var viewStateRestored = false
     private var workPosted = false
     private val visiblePageSizes = SparseArray<SizeF>()
+    private val shownPages = ArrayList<Int>()
 
     val currentPageIndex: Int
         get() = state.currentPageIndex
+    val visiblePageIndices: List<Int>
+        get() = shownPages.toList()
     val isInProgress: Boolean
         get() = loading || state.pendingPageIndex != null
 
@@ -48,9 +51,13 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
             var largestArea = 0f
             var dominantPage: Int? = null
             visiblePageSizes.clear()
+            shownPages.clear()
             for (pageIndex in firstVisiblePage until firstVisiblePage + visiblePagesCount) {
                 val bounds = pageLocations[pageIndex] ?: continue
                 visiblePageSizes.put(pageIndex, SizeF(bounds.width() / zoomLevel, bounds.height() / zoomLevel))
+                if (bounds.left >= -1f && bounds.top >= -1f &&
+                    bounds.right <= view.width + 1f && bounds.bottom <= view.height + 1f
+                ) shownPages += pageIndex
                 val width = (minOf(bounds.right, view.width.toFloat()) - maxOf(bounds.left, 0f))
                     .coerceAtLeast(0f)
                 val height = (minOf(bounds.bottom, view.height.toFloat()) - maxOf(bounds.top, 0f))
@@ -62,6 +69,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
                 }
             }
             dominantPage?.let(state::observeVisiblePage)
+            if (shownPages.isEmpty()) dominantPage?.let { shownPages += it }
 
             if (isInProgress) scheduleWork()
         }
@@ -96,6 +104,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         loadedDocument = null
         loading = true
         visiblePageSizes.clear()
+        shownPages.clear()
         state.invalidateScroll()
         onOperationStateChanged()
     }
@@ -104,6 +113,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         if (loadedDocument !== document) {
             state.invalidateScroll()
             visiblePageSizes.clear()
+            shownPages.clear()
         }
         loadedDocument = document
         scheduleWork()
@@ -113,6 +123,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         loading = false
         loadedDocument = null
         visiblePageSizes.clear()
+        shownPages.clear()
         state.cancel()
         onOperationStateChanged()
     }
@@ -135,6 +146,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         workPosted = false
         loading = true
         visiblePageSizes.clear()
+        shownPages.clear()
         state.invalidateScroll()
     }
 

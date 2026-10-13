@@ -5,7 +5,7 @@
     android:viewportHeight="960">
   <path
       android:strokeWidth="1"
-      android:pathData="m300,840v-180h-180v-90h180v-180h-180v-90h180v-180h90v180h180v-180h90v180h180v90h-180v180h180v90h-180v180h-90v-180h-180v180zM390,570h180v-180h-180z"
+      android:pathData="m287.97,80v207.97h-207.97v88.05h207.97v207.97h-207.97v88.05h207.97v207.97h88.05v-207.97h207.97v207.97h88.05v-207.97h207.97v-88.05h-207.97v-207.97h207.97v-88.05h-207.97v-207.97h-88.05v207.97h-207.97v-207.97h-88.05zM376.02,376.02h207.97v207.97h-207.97v-207.97z"
       android:strokeAlpha="0"
       android:fillColor="#ffffff"
       android:strokeColor="#00000000"/>

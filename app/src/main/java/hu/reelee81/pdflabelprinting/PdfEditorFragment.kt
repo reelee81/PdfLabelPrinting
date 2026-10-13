@@ -24,6 +24,9 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
     val isPageNavigationInProgress: Boolean
         get() = pageNavigator.isInProgress
 
+    val visiblePageIndices: List<Int>
+        get() = pageNavigator.visiblePageIndices
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pageNavigator.restore(savedInstanceState)

@@ -52,6 +52,8 @@ class ThumbnailAdapter(
     private val rotateLeftListener: (Int) -> Unit,
     private val positionListener: (Int) -> Unit,
     private val positionIconFor: (Int) -> Int,
+    private val cropListener: (Int) -> Unit,
+    private val isCroppedAt: (Int) -> Boolean,
     private val clickListener: (Int) -> Unit,
     private val selectionChanged: (Int, Boolean) -> Unit
 ) : RecyclerView.Adapter<ThumbnailAdapter.ViewHolder>() {
@@ -85,12 +87,21 @@ class ThumbnailAdapter(
             try { value.allocationByteCount } catch (_: Throwable) { value.byteCount }
     }
 
-    private val renderers = ConcurrentHashMap<String, PdfRenderer>()
-    private val rendererLocks = ConcurrentHashMap<String, ReentrantLock>()
+    private class RendererEntry(val renderer: PdfRenderer) {
+        val lock = ReentrantLock(true)
+    }
+
+    private val renderers = ConcurrentHashMap<String, RendererEntry>()
+    private val closeExecutor: ThreadPoolExecutor = ThreadPoolExecutor(
+        0,
+        1,
+        3L, TimeUnit.SECONDS,
+        LinkedBlockingQueue()
+    )
     private val prefetchLimiter = Semaphore(2, true)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    @Volatile private var onThumbnailCachedListener: ((String) -> Unit)? = null
+    @Volatile private var onThumbnailFinishedListener: ((String) -> Unit)? = null
     @Volatile private var prefetchPaused = false
     @Volatile private var lastScrollNanos: Long = 0L
 
@@ -113,8 +124,8 @@ class ThumbnailAdapter(
         return ("$docKey|${items[position].pageIndex}").hashCode().toLong()
     }
 
-    fun setOnThumbnailCachedListener(listener: ((String) -> Unit)?) {
-        onThumbnailCachedListener = listener
+    fun setOnThumbnailFinishedListener(listener: ((String) -> Unit)?) {
+        onThumbnailFinishedListener = listener
     }
 
     fun getCacheKeyForPosition(position: Int): String? {
@@ -127,38 +138,30 @@ class ThumbnailAdapter(
         return bmp != null && !bmp.isRecycled
     }
 
-    private fun notifyThumbnailCached(key: String) {
+    private fun notifyThumbnailFinished(key: String) {
         mainHandler.post {
-            onThumbnailCachedListener?.invoke(key)
+            onThumbnailFinishedListener?.invoke(key)
         }
     }
 
-    private fun closeRendererAsync(filePath: String, renderer: PdfRenderer) {
+    private fun closeRendererAsync(entry: RendererEntry) {
         try {
-            prefetchExecutor.execute {
-                val lock = rendererLocks[filePath]
-                if (lock == null) {
-                    runCatching { renderer.close() }
-                    return@execute
-                }
-
+            closeExecutor.execute {
                 while (true) {
                     if (Thread.currentThread().isInterrupted) return@execute
-                    val ok = try { lock.tryLock(200, TimeUnit.MILLISECONDS) } catch (_: Exception) { false }
+                    val ok = try { entry.lock.tryLock(200, TimeUnit.MILLISECONDS) } catch (_: Exception) { false }
                     if (ok) {
                         try {
-                            runCatching { renderer.close() }
+                            runCatching { entry.renderer.close() }
                         } finally {
-                            try { lock.unlock() } catch (_: Exception) {}
+                            try { entry.lock.unlock() } catch (_: Exception) {}
                         }
-                        rendererLocks.remove(filePath)
                         return@execute
                     }
                 }
             }
         } catch (_: RejectedExecutionException) {
-            runCatching { renderer.close() }
-            rendererLocks.remove(filePath)
+            runCatching { entry.renderer.close() }
         }
     }
 
@@ -185,7 +188,7 @@ class ThumbnailAdapter(
         prefetchPaused = false
     }
 
-    private fun getOrCreateRenderer(context: Context, filePath: String): PdfRenderer {
+    private fun getOrCreateRenderer(context: Context, filePath: String): RendererEntry {
         return renderers.computeIfAbsent(filePath) {
             val uri: Uri = if (filePath.startsWith("content://") || filePath.startsWith("file://")) {
                 filePath.toUri()
@@ -199,7 +202,7 @@ class ThumbnailAdapter(
                     context.contentResolver.openFileDescriptor(uri, "r")
                         ?: throw IllegalArgumentException(context.getString(R.string.cannot_open_uri, uri))
                 }
-            PdfRenderer(pfd)
+            RendererEntry(PdfRenderer(pfd))
         }
     }
 
@@ -247,6 +250,12 @@ class ThumbnailAdapter(
                 positionListener(posNow)
             }
         }
+        holder.btnCrop.setOnClickListener {
+            val posNow = holder.bindingAdapterPosition
+            if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
+                cropListener(posNow)
+            }
+        }
         holder.itemView.setOnClickListener {
             val posNow = holder.bindingAdapterPosition
             if (posNow != RecyclerView.NO_POSITION && posNow in items.indices) {
@@ -277,10 +286,11 @@ class ThumbnailAdapter(
                 ImageViewCompat.setImageTintList(holder.btnDelete, csl)
                 ImageViewCompat.setImageTintList(holder.btnRotateLeft, csl)
                 ImageViewCompat.setImageTintList(holder.btnPosition, csl)
+                ImageViewCompat.setImageTintList(holder.btnCrop, croppedTint(ctx, csl, isCroppedAt(safePos)))
             } else {
                 val cbCsl  = AppCompatResources.getColorStateList(ctx, R.color.ic_checkbox_page_color)
-                val delCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_color)
-                val rotCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_color)
+                val delCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_crop_color)
+                val rotCsl = AppCompatResources.getColorStateList(ctx, R.color.ic_delete_rotate_position_page_crop_color)
 
                 if (cbCsl != null) {
                     CompoundButtonCompat.setButtonTintList(holder.cbSel, cbCsl)
@@ -291,6 +301,7 @@ class ThumbnailAdapter(
                 if (rotCsl != null) {
                     ImageViewCompat.setImageTintList(holder.btnRotateLeft, rotCsl)
                     ImageViewCompat.setImageTintList(holder.btnPosition, rotCsl)
+                    ImageViewCompat.setImageTintList(holder.btnCrop, croppedTint(ctx, rotCsl, isCroppedAt(safePos)))
                 }
             }
         }
@@ -334,15 +345,14 @@ class ThumbnailAdapter(
 
         val task = KeyedFutureTask(key) {
             try {
-                val renderer = getOrCreateRenderer(context, filePath)
-                val lock = rendererLocks.computeIfAbsent(filePath) { ReentrantLock(true) }
+                val entry = getOrCreateRenderer(context, filePath)
 
                 var produced: Bitmap?
-                lock.lock()
+                entry.lock.lock()
                 try {
                     var page: PdfRenderer.Page? = null
                     try {
-                        page = renderer.openPage(item.pageIndex)
+                        page = entry.renderer.openPage(item.pageIndex)
                         val pageW = page.width.toFloat()
                         val pageH = page.height.toFloat()
                         val targetH = max(1, (targetW * (pageH / pageW)).toInt())
@@ -355,12 +365,11 @@ class ThumbnailAdapter(
                         runCatching { page?.close() }
                     }
                 } finally {
-                    lock.unlock()
+                    entry.lock.unlock()
                 }
 
                 produced.let { bmp ->
                     cache.put(key, bmp)
-                    notifyThumbnailCached(key)
                     dispatchToWaiters(key, bmp)
 
                     holder.iv.post {
@@ -379,6 +388,7 @@ class ThumbnailAdapter(
                 Log.e("ThumbnailAdapter", "Bind render (112dp) error: ${t.message}")
             } finally {
                 inFlight.remove(key)
+                notifyThumbnailFinished(key)
             }
         }
         executeBindLifo(task)
@@ -406,9 +416,9 @@ class ThumbnailAdapter(
         waiters.clear()
         cache.evictAll()
 
-        val toClose = renderers.toMap()
+        val toClose = renderers.values.toList()
         renderers.clear()
-        toClose.forEach { (fp, r) -> closeRendererAsync(fp, r) }
+        toClose.forEach(::closeRendererAsync)
 
         docKey = newDocKey
         prefetchPaused = false
@@ -422,24 +432,19 @@ class ThumbnailAdapter(
         runCatching { bindExecutor.queue.clear() }
         runCatching { prefetchExecutor.queue.clear() }
 
-        renderers.forEach { (fp, r) ->
-            val lock = rendererLocks[fp]
-            if (lock != null) {
-                val locked = try { lock.tryLock(500, TimeUnit.MILLISECONDS) } catch (_: Exception) { false }
-                if (locked) {
-                    try { runCatching { r.close() } } finally { runCatching { lock.unlock() } }
-                } else {
-                    runCatching { r.close() }
-                }
+        renderers.values.forEach { entry ->
+            val locked = try { entry.lock.tryLock(500, TimeUnit.MILLISECONDS) } catch (_: Exception) { false }
+            if (locked) {
+                try { runCatching { entry.renderer.close() } } finally { runCatching { entry.lock.unlock() } }
             } else {
-                runCatching { r.close() }
+                runCatching { entry.renderer.close() }
             }
         }
         renderers.clear()
-        rendererLocks.clear()
 
         bindExecutor.shutdownNow()
         prefetchExecutor.shutdownNow()
+        closeExecutor.shutdown()
     }
 
     fun clearAllSelections() {
@@ -555,15 +560,14 @@ class ThumbnailAdapter(
                     try {
                         if (prefetchPaused || Thread.currentThread().isInterrupted) return@Runnable
 
-                        val renderer = getOrCreateRenderer(context, info.filePath)
-                        val lock = rendererLocks.computeIfAbsent(info.filePath) { ReentrantLock(true) }
+                        val entry = getOrCreateRenderer(context, info.filePath)
 
                         var producedBmp: Bitmap?
-                        lock.lock()
+                        entry.lock.lock()
                         try {
                             var pg: PdfRenderer.Page? = null
                             try {
-                                pg = renderer.openPage(info.pageIndex)
+                                pg = entry.renderer.openPage(info.pageIndex)
 
                                 val pageW = pg.width.toFloat()
                                 val pageH = pg.height.toFloat()
@@ -589,12 +593,11 @@ class ThumbnailAdapter(
                                 try { pg?.close() } catch (_: Exception) {}
                             }
                         } finally {
-                            lock.unlock()
+                            entry.lock.unlock()
                         }
 
                         producedBmp.let { bmp ->
                             cache.put(key, bmp)
-                            notifyThumbnailCached(key)
                             dispatchToWaiters(key, bmp)
                         }
                     } catch (_: InterruptedException) {
@@ -605,6 +608,7 @@ class ThumbnailAdapter(
                     } finally {
                         prefetchLimiter.release()
                         inFlight.remove(key)
+                        notifyThumbnailFinished(key)
                     }
                 })
                 prefetchExecutor.execute(fut)
@@ -636,6 +640,16 @@ class ThumbnailAdapter(
         }
     }
 
+    private fun croppedTint(context: Context, base: ColorStateList, cropped: Boolean): ColorStateList {
+        if (!cropped) return base
+        val croppedColor = ContextCompat.getColor(context, R.color.love_50)
+        val disabled = intArrayOf(-android.R.attr.state_enabled)
+        return ColorStateList(
+            arrayOf(disabled, intArrayOf()),
+            intArrayOf(base.getColorForState(disabled, croppedColor), croppedColor)
+        )
+    }
+
     private fun ImageView.safeSetBitmap(bmp: Bitmap?) {
         if (bmp == null || bmp.isRecycled) setImageDrawable(null) else setImageBitmap(bmp)
     }
@@ -645,6 +659,7 @@ class ThumbnailAdapter(
         val btnDelete: ImageButton = itemView.findViewById(R.id.btn_delete)
         val btnRotateLeft: ImageButton = itemView.findViewById(R.id.btn_rotate_left)
         val btnPosition: ImageButton = itemView.findViewById(R.id.btn_position)
+        val btnCrop: ImageButton = itemView.findViewById(R.id.btn_crop)
         val tvSize: TextView = itemView.findViewById(R.id.tv_size_label)
         val cbSel: AppCompatCheckBox = itemView.findViewById(R.id.cb_select)
         val tvPageNumber: TextView = itemView.findViewById(R.id.page_number)

@@ -10,11 +10,14 @@ import android.os.ext.SdkExtensions
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresExtension
 import androidx.appcompat.content.res.AppCompatResources
+import androidx.appcompat.widget.AppCompatImageButton
 import androidx.appcompat.widget.Toolbar.LayoutParams
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -23,7 +26,9 @@ import androidx.core.view.isVisible
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.PdfWriteHandle
+import com.itextpdf.io.source.RandomAccessSourceFactory
 import com.itextpdf.kernel.pdf.PdfDocument as ITextPdfDocument
+import com.itextpdf.kernel.pdf.ReaderProperties
 import com.itextpdf.kernel.pdf.PdfName
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfWriter
@@ -31,9 +36,18 @@ import com.itextpdf.kernel.utils.PdfAnnotationFlattener
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.milliseconds
 
 class PdfEditorActivity : PdfActivity() {
 
@@ -42,14 +56,29 @@ class PdfEditorActivity : PdfActivity() {
         const val EXTRA_OUTPUT_URI = "pdf_output_uri"
         const val EXTRA_INITIAL_PAGE_INDEX = "pdf_initial_page_index"
         const val EXTRA_CURRENT_PAGE_INDEX = "pdf_current_page_index"
+        const val EXTRA_BATCH_SIZE = "pdf_batch_size"
         private const val FRAG_TAG = "pdfEditorFrag"
         private const val STATE_DISCARD_CONFIRMATION_VISIBLE = "pdf_discard_confirmation_visible"
+        private const val STATE_ERASE_ALL_CONFIRMATION_VISIBLE = "pdf_erase_all_confirmation_visible"
+        private const val STATE_ERASED_FILE = "pdf_erased_file"
+        private const val STATE_APPLIED_FILE = "pdf_applied_file"
+        private const val DISABLED_ALPHA = 0.38f
+        private val ERASE_OVERLAY_DELAY = 300.milliseconds
+        private const val NEEDS_CONFIRMATION = -1
     }
 
     private lateinit var fragment: PdfEditorFragment
     private var saveButton: MaterialButton? = null
+    private val eraseButtons = mutableListOf<View>()
     private var saving = false
     private var documentLoaded = false
+    private var eraseJob: Job? = null
+    private var eraseOverlayShown = false
+    private var erasing = false
+    private var erasedFile: File? = null
+    private var erasedFileDelivered = false
+    private var saveJob: Job? = null
+    private var appliedFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,13 +116,16 @@ class PdfEditorActivity : PdfActivity() {
                     .commitNow()
             }
 
+        erasedFile = savedInstanceState?.getString(STATE_ERASED_FILE)?.let(::File)?.takeIf { it.isFile }
+        appliedFile = savedInstanceState?.getString(STATE_APPLIED_FILE)?.let(::File)?.takeIf { it.isFile }
         if (savedInstanceState == null) {
             fragment.loadDocumentAtPage(uri, intent.getIntExtra(EXTRA_INITIAL_PAGE_INDEX, 0))
         } else {
-            fragment.documentUri = uri
+            fragment.documentUri = erasedFile?.let(::uriFor) ?: uri
         }
 
         addSaveButton(toolbar)
+        addEraseButtons(toolbar)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -104,6 +136,9 @@ class PdfEditorActivity : PdfActivity() {
         if (savedInstanceState?.getBoolean(STATE_DISCARD_CONFIRMATION_VISIBLE) == true) {
             showDiscardConfirmation()
         }
+        if (savedInstanceState?.getBoolean(STATE_ERASE_ALL_CONFIRMATION_VISIBLE) == true) {
+            showEraseAllConfirmation()
+        }
         onPdfOperationStateChanged()
     }
 
@@ -112,22 +147,60 @@ class PdfEditorActivity : PdfActivity() {
             STATE_DISCARD_CONFIRMATION_VISIBLE,
             findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)?.isVisible == true
         )
+        outState.putBoolean(
+            STATE_ERASE_ALL_CONFIRMATION_VISIBLE,
+            findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all)?.isVisible == true
+        )
+        erasedFile?.let { outState.putString(STATE_ERASED_FILE, it.absolutePath) }
+        appliedFile?.let { outState.putString(STATE_APPLIED_FILE, it.absolutePath) }
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) {
+            if (!erasedFileDelivered) {
+                erasedFile?.delete()
+                erasedFile = null
+            }
+            appliedFile?.delete()
+            appliedFile = null
+        }
+        super.onDestroy()
     }
 
     override fun isPdfNavigationInProgress(): Boolean =
         supportsPdfEditing() && ::fragment.isInitialized && fragment.isPageNavigationInProgress
 
     override fun isPdfSavingInProgress(): Boolean =
-        saving || (supportsPdfEditing() && ::fragment.isInitialized && fragment.isApplyEditsInProgress)
+        saving || eraseJob != null ||
+            (supportsPdfEditing() && ::fragment.isInitialized && fragment.isApplyEditsInProgress)
 
     override fun isPdfOperationInProgress(): Boolean =
         isPdfSavingInProgress() || isPdfNavigationInProgress()
 
+    override fun isPdfWaitOverlayDeferred(): Boolean = eraseJob != null && !eraseOverlayShown
+
+    override fun cancelablePdfOperationCaption(): Int? = when {
+        eraseJob != null -> if (erasing) R.string.pdf_edits_erasing else R.string.pdf_navigation_wait
+        saveJob?.isCancelled == false -> R.string.pdf_edits_saving
+        else -> null
+    }
+
+    override fun cancelPdfOperation() {
+        eraseJob?.cancel()
+        saveJob?.cancel()
+        onPdfOperationStateChanged()
+    }
+
     override fun onPdfNavigationStateChanged(inProgress: Boolean) {
         if (!supportsPdfEditing() || !::fragment.isInitialized) return
-        saveButton?.isEnabled = documentLoaded && !inProgress && !saving && !fragment.isApplyEditsInProgress
-        if (documentLoaded && !inProgress && !saving && !isFinishing && !isDestroyed &&
+        val ready = documentLoaded && !inProgress && !saving && eraseJob == null && !fragment.isApplyEditsInProgress
+        saveButton?.isEnabled = ready
+        for (button in eraseButtons) {
+            button.isEnabled = ready
+            button.alpha = if (ready) 1f else DISABLED_ALPHA
+        }
+        if (documentLoaded && !inProgress && !saving && eraseJob == null && !isFinishing && !isDestroyed &&
             !fragment.isEditModeEnabled
         ) {
             fragment.isEditModeEnabled = true
@@ -160,6 +233,162 @@ class PdfEditorActivity : PdfActivity() {
         toolbar.addView(saveButton)
     }
 
+    private fun addEraseButtons(toolbar: MaterialToolbar) {
+        val size = resources.getDimensionPixelSize(R.dimen.dp_32)
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                rightMargin = resources.getDimensionPixelSize(R.dimen.dp_14)
+            }
+        }
+        val visible = createEraseButton(R.drawable.ic_erase_one_page_24, R.string.erase_visible_pdf_edits, size)
+        (visible.layoutParams as LinearLayout.LayoutParams).marginEnd = resources.getDimensionPixelSize(R.dimen.dp_10)
+        visible.setOnClickListener { erasePdfEdits(all = false) }
+        val all = createEraseButton(R.drawable.ic_erase_all_pages_24, R.string.erase_all_pdf_edits, size)
+        all.setOnClickListener { erasePdfEdits(all = true, confirmFirst = true) }
+        buttons.addView(visible)
+        buttons.addView(all)
+        eraseButtons += visible
+        eraseButtons += all
+        toolbar.addView(buttons)
+    }
+
+    private fun createEraseButton(iconRes: Int, descriptionRes: Int, size: Int): AppCompatImageButton =
+        AppCompatImageButton(this).apply {
+            setImageDrawable(AppCompatResources.getDrawable(this@PdfEditorActivity, iconRes))
+            contentDescription = getString(descriptionRes)
+            imageTintList = AppCompatResources.getColorStateList(
+                this@PdfEditorActivity,
+                R.color.toolbar_navigation_icon_color
+            )
+            background = null
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            val padding = resources.getDimensionPixelSize(R.dimen.dp_2)
+            setPadding(padding, padding, padding, padding)
+            isEnabled = false
+            alpha = DISABLED_ALPHA
+            layoutParams = LinearLayout.LayoutParams(size, size)
+        }
+
+    private fun canStartEditorOperation(): Boolean =
+        supportsPdfEditing() && ::fragment.isInitialized && documentLoaded && !isPdfOperationInProgress()
+
+    private fun uriFor(file: File): Uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
+
+    private fun erasePdfEdits(all: Boolean, confirmFirst: Boolean = false) {
+        if (!canStartEditorOperation()) return
+        val input = fragment.documentUri ?: return
+        val pages = if (all) null else fragment.visiblePageIndices.map { it + 1 }.toSet()
+        if (pages != null && pages.isEmpty()) return
+        val pageIndex = fragment.currentPageIndex
+        val batchSize = intent.getIntExtra(EXTRA_BATCH_SIZE, 1)
+        val ownInput = erasedFile
+        val open: () -> PdfReader = if (ownInput != null) {
+            { PdfReader(ownInput) }
+        } else {
+            { readerFor(input) }
+        }
+
+        eraseOverlayShown = false
+        erasing = false
+        val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
+            val output = File(cacheDir, "edited_${System.currentTimeMillis()}.pdf")
+            var keepOutput = false
+            val reveal = launch {
+                delay(ERASE_OVERLAY_DELAY)
+                showEraseOverlay()
+            }
+            try {
+                val cleared = withContext(Dispatchers.IO) {
+                    if (!PdfEditProjection.hasLayers(open, pages, batchSize) { ensureActive() }) {
+                        0
+                    } else if (confirmFirst) {
+                        NEEDS_CONFIRMATION
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            reveal.cancel()
+                            erasing = true
+                            eraseOverlayShown = true
+                            onPdfOperationStateChanged()
+                        }
+                        PdfEditProjection.clearLayers(open, output, pages, batchSize) { ensureActive() }
+                    }
+                }
+                if (cleared == NEEDS_CONFIRMATION) {
+                    showEraseAllConfirmation()
+                } else if (cleared > 0) {
+                    keepOutput = true
+                    erasedFile = output
+                    appliedFile?.delete()
+                    appliedFile = null
+                    documentLoaded = false
+                    fragment.loadDocumentAtPage(uriFor(output), pageIndex)
+                    ownInput?.delete()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this@PdfEditorActivity,
+                    getString(R.string.pdf_edits_erase_failed, e.message),
+                    Toast.LENGTH_LONG
+                ).show()
+            } finally {
+                reveal.cancel()
+                if (!keepOutput) output.delete()
+                eraseJob = null
+                eraseOverlayShown = false
+                erasing = false
+                onPdfOperationStateChanged()
+            }
+        }
+        eraseJob = job
+        onPdfOperationStateChanged()
+        job.start()
+    }
+
+    private fun showEraseOverlay() {
+        if (eraseJob == null || eraseOverlayShown) return
+        eraseOverlayShown = true
+        onPdfOperationStateChanged()
+    }
+
+    private fun readerFor(uri: Uri): PdfReader {
+        val descriptor = contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IOException(getString(R.string.input_stream_is_null))
+        val channel = ParcelFileDescriptor.AutoCloseInputStream(descriptor).channel
+        return try {
+            PdfReader(RandomAccessSourceFactory().createBestSource(channel), ReaderProperties())
+        } catch (e: Exception) {
+            channel.close()
+            throw e
+        }
+    }
+
+    private fun showEraseAllConfirmation() {
+        val overlay = findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all)
+        overlay.setOnClickListener { hideEraseAllConfirmation() }
+        findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all_panel).setOnClickListener { }
+        findViewById<MaterialButton>(R.id.pdf_editor_erase_all_cancel).setOnClickListener { hideEraseAllConfirmation() }
+        findViewById<MaterialButton>(R.id.pdf_editor_erase_all_confirm).setOnClickListener {
+            hideEraseAllConfirmation()
+            erasePdfEdits(all = true)
+        }
+        overlay.isVisible = true
+    }
+
+    private fun hideEraseAllConfirmation() {
+        findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all).apply {
+            isVisible = false
+            setOnClickListener(null)
+        }
+    }
+
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     fun onEditorDocumentLoaded() {
         documentLoaded = true
@@ -175,9 +404,20 @@ class PdfEditorActivity : PdfActivity() {
         if (!supportsPdfEditing()) return
         if (!documentLoaded) return
         if (fragment.isPageNavigationInProgress) return
-        if (saving || fragment.isApplyEditsInProgress) return
+        if (saving || eraseJob != null || fragment.isApplyEditsInProgress) return
 
         if (!fragment.hasUnsavedChanges) {
+            val applied = appliedFile
+            if (applied != null) {
+                writeAndFlatten(handle = null, applied = applied)
+                return
+            }
+            val erased = erasedFile
+            if (erased != null) {
+                erasedFileDelivered = true
+                finishEditor(uriFor(erased))
+                return
+            }
             Toast.makeText(this, getString(R.string.no_pdf_edits_to_save), Toast.LENGTH_SHORT).show()
             return
         }
@@ -193,35 +433,60 @@ class PdfEditorActivity : PdfActivity() {
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     fun onApplyEditsSuccess(handle: PdfWriteHandle) {
+        writeAndFlatten(handle = handle, applied = null)
+    }
+
+    private fun writeAndFlatten(handle: PdfWriteHandle?, applied: File?) {
         saving = true
-        onPdfOperationStateChanged()
-        lifecycleScope.launch {
+        val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
+            val stamp = System.currentTimeMillis()
+            val raw = applied ?: File(cacheDir, "applied_$stamp.pdf")
+            val outFile = File(cacheDir, "edited_$stamp.pdf")
             try {
-                val outFile = File(cacheDir, "edited_${System.currentTimeMillis()}.pdf")
-
-                withContext(Dispatchers.IO) {
-                    handle.use { writeHandle ->
-                        ParcelFileDescriptor.open(
-                            outFile,
-                            ParcelFileDescriptor.MODE_CREATE or
-                                    ParcelFileDescriptor.MODE_TRUNCATE or
-                                    ParcelFileDescriptor.MODE_READ_WRITE
-                        ).use { pfd ->
-                            writeHandle.writeTo(pfd)
+                if (handle != null) {
+                    try {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            handle.use { writeHandle ->
+                                ParcelFileDescriptor.open(
+                                    raw,
+                                    ParcelFileDescriptor.MODE_CREATE or
+                                            ParcelFileDescriptor.MODE_TRUNCATE or
+                                            ParcelFileDescriptor.MODE_READ_WRITE
+                                ).use { pfd ->
+                                    writeHandle.writeTo(pfd)
+                                }
+                            }
                         }
+                    } catch (e: Exception) {
+                        raw.delete()
+                        throw e
                     }
-                    flattenVisibleAnnotations(outFile)
+                    appliedFile?.takeIf { it != raw }?.delete()
+                    appliedFile = raw
                 }
+                withContext(Dispatchers.IO) { flattenAnnotationsInto(raw, outFile) }
 
-                val outUri = FileProvider.getUriForFile(this@PdfEditorActivity, "$packageName.provider", outFile)
+                val outUri = uriFor(outFile)
+                appliedFile?.delete()
+                appliedFile = null
+                erasedFile?.delete()
+                erasedFile = null
                 finishEditor(outUri)
+            } catch (e: CancellationException) {
+                outFile.delete()
+                throw e
             } catch (e: Exception) {
-                saving = false
-                saveButton?.isEnabled = true
+                outFile.delete()
                 Toast.makeText(this@PdfEditorActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
+            } finally {
+                saveJob = null
+                saving = false
                 onPdfOperationStateChanged()
             }
         }
+        saveJob = job
+        onPdfOperationStateChanged()
+        job.start()
     }
 
     fun onApplyEditsFailed(error: Throwable) {
@@ -231,13 +496,11 @@ class PdfEditorActivity : PdfActivity() {
         onPdfOperationStateChanged()
     }
 
-    private fun flattenVisibleAnnotations(file: File) {
-        val flatFile = File(cacheDir, "flattened_${System.currentTimeMillis()}.pdf")
-        if (flatFile.exists()) flatFile.delete()
-
+    private fun CoroutineScope.flattenAnnotationsInto(file: File, flatFile: File) {
         ITextPdfDocument(PdfReader(file.absolutePath), PdfWriter(flatFile.absolutePath)).use { pdf ->
             val flattener = PdfAnnotationFlattener()
             for (pageNumber in 1..pdf.numberOfPages) {
+                ensureActive()
                 val page = pdf.getPage(pageNumber)
                 val annotations = page.annotations
                     .filter { annotation ->
@@ -256,16 +519,19 @@ class PdfEditorActivity : PdfActivity() {
                 }
             }
         }
-
-        if (file.exists()) file.delete()
-        if (!flatFile.renameTo(file)) {
-            flatFile.copyTo(file, overwrite = true)
-            flatFile.delete()
-        }
     }
 
     private fun finishOrConfirmDiscard() {
+        if (cancelablePdfOperationCaption() != null) {
+            cancelPdfOperation()
+            return
+        }
         if (isPdfSavingInProgress()) return
+
+        if (findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all).isVisible) {
+            hideEraseAllConfirmation()
+            return
+        }
 
         val overlay = findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)
         if (overlay.isVisible) {
@@ -278,7 +544,7 @@ class PdfEditorActivity : PdfActivity() {
             return
         }
 
-        if (::fragment.isInitialized && fragment.hasUnsavedChanges) {
+        if (::fragment.isInitialized && (fragment.hasUnsavedChanges || erasedFile != null || appliedFile != null)) {
             showDiscardConfirmation()
         } else {
             finishEditor()

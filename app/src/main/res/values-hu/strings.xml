@@ -62,16 +62,15 @@
     <string name="in_progress_signature_editing">Aláírás szerkesztése\u2026</string>
     <string name="in_progress_rotation">Forgatás\u2026</string>
     <string name="in_progress_position">Pozicionálás\u2026</string>
+    <string name="in_progress_crop">Vágás\u2026</string>
     <string name="in_progress_print">Nyomtatás\u2026</string>
     <string name="in_progress_send">Küldés\u2026</string>
     <string name="in_progress_save">Mentés\u2026</string>
-    <string name="in_progress_password_verification">Jelszó ellenőrzése\u2026</string>
     <string name="in_progress_pdf_reading">PDF olvasása\u2026</string>
     <string name="in_progress_page_layout">Oldalelrendezés\u2026</string>
     <string name="in_progress_ui">Felület frissítése\u2026</string>
     <string name="pdf_navigation_wait">Kérlek várj</string>
     <string name="pdf_edits_saving">Mentés folyamatban</string>
-    <string name="pdf_navigation_wait_dots" translatable="false">...</string>
     <string name="no_app_can_open_pdf">Nincs olyan alkalmazás, ami meg tudja nyitni a PDF-et</string>
     <string name="no_app_can_share_pdf">Nincs olyan alkalmazás, ami meg tudja osztani a PDF-et</string>
     <string name="print_service_not_available">A nyomtatási szolgáltatás nem érhető el</string>
@@ -85,6 +84,7 @@
     <string name="failed_to_delete_selected_groups_with_msg">A kijelölt csoportok törlése sikertelen: %1$s</string>
     <string name="failed_to_rotate_selected_groups_with_msg">A kijelölt csoportok forgatása sikertelen: %1$s</string>
     <string name="failed_to_position_selected_groups_with_msg">A kijelölt csoportok pozicionálása sikertelen: %1$s</string>
+    <string name="failed_to_crop_selected_groups_with_msg">A kijelölt csoportok vágása sikertelen: %1$s</string>
     <string name="failed_to_delete_signature">Az aláírás törlése sikertelen</string>
     <string name="signature_image_invalid">Az aláírás képe nem található/érvénytelen</string>
     <string name="enter_value_0_100">Adj meg 0 és 100 közötti értéket (mm)</string>
@@ -132,6 +132,9 @@
     <string name="battery_optimization">Akkumulátor optimalizálás</string>
     <string name="battery_optimization_text">A hosszú PDF műveletek (1000+ oldal) miatt érdemes kikapcsolni az akku-optimalizálást az alkalmazásnál, különben a rendszer megállíthatja a feldolgozást, ha háttérbe teszed az appot vagy lezárod a kijelzőt. Különböző gyártóknál más-másféleképpen lehet ezt a beállítást elérni, de általában a Beállítások → Alkalmazások → Alkalmazások kezelése → Pdf Címkenyomtatás → Itt kell keresni az "Energiafogyasztás" vagy a "Akkumulátor" beállítási lehetőségeket, amelyeken belül ki/be kapcsolható. Ennek ellenére is előfordulhat, hogy a folyamat szüneteltetett állapotba kerül, mert egyes gyártók túl agresszívan kezelik az akkumulátor védelmet például lezárt kijelzőnél. Ezért ha biztosra akarsz menni, hogy a hosszú műveletek végigfussanak, maradj az app felületén, mert ilyenkor ébren tartja a kijelzőt a feldolgozási folyamat befejezéséig.</string>
     <string name="position_on_page">Pozicionálás az oldal(ak)on</string>
+    <string name="crop_title">Szabad vágás</string>
+    <string name="crop_all_pages">Alkalmazás minden oldalon</string>
+    <string name="crop_full_page">VISSZAÁLLÍTÁS</string>
     <string name="search_pdf">KERESÉS</string>
     <string name="edit_pdf">Szerkesztés</string>
     <string name="save_pdf_edits">MENTÉS</string>
@@ -140,4 +143,9 @@
     <string name="no_pdf_edits_to_save">Nincs menthető PDF-módosítás</string>
     <string name="discard_pdf_edits">Eldobod a PDF-módosításokat?</string>
     <string name="discard_text">ELDOBÁS</string>
+    <string name="erase_visible_pdf_edits">Mentett szerkesztések törlése a látható lapokról</string>
+    <string name="erase_all_pdf_edits">Mentett szerkesztések törlése minden lapról</string>
+    <string name="erase_all_pdf_edits_confirm">Törlöd a mentett szerkesztéseket minden lapról?</string>
+    <string name="pdf_edits_erasing">Szerkesztések törlése</string>
+    <string name="pdf_edits_erase_failed">A szerkesztések törlése sikertelen: %1$s</string>
 </resources>

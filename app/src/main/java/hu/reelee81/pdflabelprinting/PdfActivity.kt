@@ -25,13 +25,15 @@ abstract class PdfActivity : AppCompatActivity() {
     private var recreationPosted = false
     private var waitOverlay: View? = null
     private var waitDots: TextView? = null
+    private var waitCancel: View? = null
     private var waitAnimationRunning = false
     private var waitDotCount = 0
     private var focusBeforeNavigation: View? = null
     private val blockedContent = mutableListOf<BlockedContentState>()
     private val cancelNavigationOnBack = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
-            if (!isPdfSavingInProgress()) finish()
+            if (cancelablePdfOperationCaption() != null) cancelPdfOperation()
+            else if (!isPdfSavingInProgress()) finish()
         }
     }
     private val animateWaitDots = object : Runnable {
@@ -61,6 +63,12 @@ abstract class PdfActivity : AppCompatActivity() {
 
     protected open fun onPdfNavigationStateChanged(inProgress: Boolean) {}
 
+    protected open fun isPdfWaitOverlayDeferred(): Boolean = false
+
+    protected open fun cancelablePdfOperationCaption(): Int? = null
+
+    protected open fun cancelPdfOperation() {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, cancelNavigationOnBack)
@@ -87,7 +95,8 @@ abstract class PdfActivity : AppCompatActivity() {
         lastConfiguration = Configuration(newConfig)
         super.onConfigurationChanged(newConfig)
 
-        findViewById<View>(R.id.overlay_dialog_pdf_editor_discard_panel)?.let { panel ->
+        for (id in listOf(R.id.overlay_dialog_pdf_editor_discard_panel, R.id.overlay_dialog_pdf_editor_erase_all_panel)) {
+            val panel = findViewById<View>(id) ?: continue
             val params = panel.layoutParams as ConstraintLayout.LayoutParams
             params.matchConstraintMaxWidth = resources.getDimensionPixelSize(R.dimen.dp_9999_overlay)
             panel.layoutParams = params
@@ -123,10 +132,15 @@ abstract class PdfActivity : AppCompatActivity() {
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean =
-        isPdfSavingInProgress() ||
-            waitOverlay?.isVisible == true &&
-                findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)?.isVisible != true ||
+        if (waitOverlay?.isVisible == true && waitCancel?.isVisible == true) {
             super.dispatchTouchEvent(event)
+        } else {
+            isPdfSavingInProgress() ||
+                waitOverlay?.isVisible == true &&
+                    findViewById<View>(R.id.overlay_dialog_pdf_editor_discard)?.isVisible != true &&
+                    findViewById<View>(R.id.overlay_dialog_pdf_editor_erase_all)?.isVisible != true ||
+                super.dispatchTouchEvent(event)
+        }
 
     override fun finish() {
         stopWaitAnimation()
@@ -136,9 +150,23 @@ abstract class PdfActivity : AppCompatActivity() {
     private fun updateWaitOverlay(navigating: Boolean, saving: Boolean) {
         val overlay = waitOverlay ?: findViewById<View>(R.id.overlay_pdf_navigation_wait)
             ?.also { waitOverlay = it } ?: return
-        val waiting = navigating || saving
-        val caption = getString(if (saving) R.string.pdf_edits_saving else R.string.pdf_navigation_wait)
-        findViewById<TextView>(R.id.pdf_navigation_wait_caption).text = caption
+        val waiting = (navigating || saving) && !isPdfWaitOverlayDeferred()
+        val cancelableCaption = cancelablePdfOperationCaption()
+        val caption = getString(
+            cancelableCaption ?: if (saving) R.string.pdf_edits_saving else R.string.pdf_navigation_wait
+        )
+        val cancel = waitCancel ?: findViewById<View>(R.id.pdf_navigation_wait_cancel)
+            ?.also { button ->
+                waitCancel = button
+                button.setOnClickListener { cancelPdfOperation() }
+            }
+        cancel?.isVisible = waiting && cancelableCaption != null
+        findViewById<TextView>(R.id.pdf_navigation_wait_caption).let { view ->
+            if (view.text.toString() != caption) {
+                view.text = caption
+                view.requestLayout()
+            }
+        }
         overlay.contentDescription = caption
         val dots = waitDots ?: findViewById<TextView>(R.id.pdf_navigation_wait_dots)
             .also {

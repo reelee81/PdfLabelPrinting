@@ -8,6 +8,9 @@
     <color name="dialog_overlay_background_color">#80000000</color>
     <color name="pdf_navigation_wait_scrim">#99000000</color>
     <color name="love_50">#FFF59393</color>
+    <color name="crop_frame_color">#FF0062FF</color>
+    <color name="crop_shade_color">#80000000</color>
+    <color name="crop_grid_color">#9903DAC5</color>
     <color name="gummy_150">#FF7FB0FF</color>
     <color name="gummy_125">#FF4089FF</color>
     <color name="gummy_100">#FF0062FF</color>
