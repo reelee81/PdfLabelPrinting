@@ -29,8 +29,8 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 37
-        versionCode = 28
-        versionName = "28.0"
+        versionCode = 29
+        versionName = "29.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -58,6 +58,12 @@ android {
     androidResources {
         val locales = parseLocalesConfig(file("src/main/res/xml/locales_config.xml"))
         localeFilters += locales
+    }
+
+    bundle {
+        language {
+            enableSplit = false
+        }
     }
 }
 

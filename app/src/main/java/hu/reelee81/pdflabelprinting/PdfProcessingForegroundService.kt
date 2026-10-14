@@ -17,11 +17,15 @@ class PdfProcessingForegroundService : Service() {
         private const val CHANNEL_ID = "PdfProcessingForegroundServiceChannel"
         private const val NOTIFICATION_ID = 1
         private const val EXTRA_MESSAGE = "EXTRA_MESSAGE"
+        private const val EXTRA_PROGRESS = "EXTRA_PROGRESS"
+        const val PROGRESS_NONE = -2
+        const val PROGRESS_INDETERMINATE = -1
 
-        fun start(context: Context, message: String) {
+        fun start(context: Context, message: String, progress: Int = PROGRESS_NONE) {
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, PdfProcessingForegroundService::class.java).apply {
                 putExtra(EXTRA_MESSAGE, message)
+                putExtra(EXTRA_PROGRESS, progress)
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -48,13 +52,21 @@ class PdfProcessingForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val message = intent?.getStringExtra(EXTRA_MESSAGE) ?: getString(R.string.in_progress_my)
+        val progress = intent?.getIntExtra(EXTRA_PROGRESS, PROGRESS_NONE) ?: PROGRESS_NONE
 
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(message)
             .setSmallIcon(R.drawable.ic_statusbar_icon_24)
             .setOngoing(true)
-            .build()
+            .setOnlyAlertOnce(true)
+        when {
+            progress >= 0 -> builder
+                .setProgress(100, progress, false)
+                .setSubText(getString(R.string.progress_percent, progress))
+            progress == PROGRESS_INDETERMINATE -> builder.setProgress(0, 0, true)
+        }
+        val notification: Notification = builder.build()
 
         startForeground(NOTIFICATION_ID, notification)
 

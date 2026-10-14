@@ -12,6 +12,8 @@ import android.view.MotionEvent.ACTION_UP
 import android.view.View
 import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.RecyclerView.AdapterDataObserver
 import androidx.recyclerview.widget.RecyclerView.ItemDecoration
@@ -351,7 +353,18 @@ class AlwaysVisibleFastScroller(
         val maxScroll = (range - extent).coerceAtLeast(0)
         val targetOffset = (proportion * maxScroll).toInt()
 
-        recyclerView.scrollBy(0, targetOffset - offset)
+        val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
+        val itemCount = recyclerView.adapter?.itemCount ?: 0
+        if (layoutManager != null && itemCount > 0 && range > 0) {
+            val span = (layoutManager as? GridLayoutManager)?.spanCount?.coerceAtLeast(1) ?: 1
+            val rows = (itemCount + span - 1) / span
+            val rowHeight = range.toFloat() / rows
+            val row = (targetOffset / rowHeight).toInt().coerceIn(0, rows - 1)
+            val withinRow = (targetOffset - row * rowHeight).roundToInt()
+            layoutManager.scrollToPositionWithOffset(row * span, -withinRow)
+        } else {
+            recyclerView.scrollBy(0, targetOffset - offset)
+        }
 
         recyclerView.invalidate()
     }

@@ -129,6 +129,9 @@ class PdfEditorActivity : PdfActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (isPdfWaitActive() &&
+                    !findViewById<View>(R.id.overlay_dialog_pdf_editor_discard).isVisible
+                ) return
                 finishOrConfirmDiscard()
             }
         })
@@ -190,6 +193,13 @@ class PdfEditorActivity : PdfActivity() {
         eraseJob?.cancel()
         saveJob?.cancel()
         onPdfOperationStateChanged()
+    }
+
+    override fun isPdfDocumentLoading(): Boolean =
+        supportsPdfEditing() && ::fragment.isInitialized && fragment.isDocumentLoading
+
+    override fun onPdfLoadCancelled() {
+        finishOrConfirmDiscard()
     }
 
     override fun onPdfNavigationStateChanged(inProgress: Boolean) {
@@ -305,7 +315,10 @@ class PdfEditorActivity : PdfActivity() {
             }
             try {
                 val cleared = withContext(Dispatchers.IO) {
-                    if (!PdfEditProjection.hasLayers(open, pages, batchSize) { ensureActive() }) {
+                    val total = ITextPdfDocument(open().setMemorySavingMode(true)).use { it.numberOfPages }
+                    val scanned = pages?.count { it in 1..total } ?: total
+                    val scan = progressStage(scanned.toLong() + if (confirmFirst) 0 else total)
+                    if (!PdfEditProjection.hasLayers(open, pages, batchSize, onProgress = scan::advance) { ensureActive() }) {
                         0
                     } else if (confirmFirst) {
                         NEEDS_CONFIRMATION
@@ -316,7 +329,10 @@ class PdfEditorActivity : PdfActivity() {
                             eraseOverlayShown = true
                             onPdfOperationStateChanged()
                         }
-                        PdfEditProjection.clearLayers(open, output, pages, batchSize) { ensureActive() }
+                        val clear = progressStage(total.toLong())
+                        PdfEditProjection.clearLayers(open, output, pages, batchSize, onProgress = clear::advance) {
+                            ensureActive()
+                        }.also { clear.idle() }
                     }
                 }
                 if (cleared == NEEDS_CONFIRMATION) {
@@ -444,25 +460,27 @@ class PdfEditorActivity : PdfActivity() {
             val outFile = File(cacheDir, "edited_$stamp.pdf")
             try {
                 if (handle != null) {
-                    try {
-                        withContext(NonCancellable + Dispatchers.IO) {
-                            handle.use { writeHandle ->
-                                ParcelFileDescriptor.open(
-                                    raw,
-                                    ParcelFileDescriptor.MODE_CREATE or
-                                            ParcelFileDescriptor.MODE_TRUNCATE or
-                                            ParcelFileDescriptor.MODE_READ_WRITE
-                                ).use { pfd ->
-                                    writeHandle.writeTo(pfd)
+                    withContext(NonCancellable) {
+                        try {
+                            withContext(Dispatchers.IO) {
+                                handle.use { writeHandle ->
+                                    ParcelFileDescriptor.open(
+                                        raw,
+                                        ParcelFileDescriptor.MODE_CREATE or
+                                                ParcelFileDescriptor.MODE_TRUNCATE or
+                                                ParcelFileDescriptor.MODE_READ_WRITE
+                                    ).use { pfd ->
+                                        writeHandle.writeTo(pfd)
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            raw.delete()
+                            throw e
                         }
-                    } catch (e: Exception) {
-                        raw.delete()
-                        throw e
+                        appliedFile?.takeIf { it != raw }?.delete()
+                        appliedFile = raw
                     }
-                    appliedFile?.takeIf { it != raw }?.delete()
-                    appliedFile = raw
                 }
                 withContext(Dispatchers.IO) { flattenAnnotationsInto(raw, outFile) }
 
@@ -474,6 +492,9 @@ class PdfEditorActivity : PdfActivity() {
                 finishEditor(outUri)
             } catch (e: CancellationException) {
                 outFile.delete()
+                if (appliedFile != null && !isFinishing) {
+                    Toast.makeText(this@PdfEditorActivity, getString(R.string.pdf_edits_save_cancelled), Toast.LENGTH_LONG).show()
+                }
                 throw e
             } catch (e: Exception) {
                 outFile.delete()
@@ -499,6 +520,7 @@ class PdfEditorActivity : PdfActivity() {
     private fun CoroutineScope.flattenAnnotationsInto(file: File, flatFile: File) {
         ITextPdfDocument(PdfReader(file.absolutePath), PdfWriter(flatFile.absolutePath)).use { pdf ->
             val flattener = PdfAnnotationFlattener()
+            val progress = progressStage(pdf.numberOfPages.toLong())
             for (pageNumber in 1..pdf.numberOfPages) {
                 ensureActive()
                 val page = pdf.getPage(pageNumber)
@@ -517,7 +539,9 @@ class PdfEditorActivity : PdfActivity() {
                 if (annotations.isNotEmpty()) {
                     flattener.flatten(annotations)
                 }
+                progress.advance(1)
             }
+            progress.idle()
         }
     }
 

@@ -25,6 +25,10 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         get() = shownPages.toList()
     val isInProgress: Boolean
         get() = loading || state.pendingPageIndex != null
+    val isLoading: Boolean
+        get() = opening && (loading || state.pendingPageIndex != null)
+    private var opening = true
+    private var documentShown = false
 
     private val work = Runnable {
         workPosted = false
@@ -103,6 +107,7 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
     fun beginDocumentLoad() {
         loadedDocument = null
         loading = true
+        opening = !documentShown
         visiblePageSizes.clear()
         shownPages.clear()
         state.invalidateScroll()
@@ -185,6 +190,8 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
             (centerY in bounds.top..bounds.bottom ||
                 (bounds.top >= view.paddingTop && bounds.bottom <= view.height - view.paddingBottom)) &&
             state.confirmArrival(pending)
+        documentShown = true
+        if (state.pendingPageIndex == null) opening = false
         if (wasLoading || completed) onOperationStateChanged()
     }
 

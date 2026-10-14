@@ -25,11 +25,25 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:indeterminate="true"
+        android:max="100"
         app:trackThickness="@dimen/dp_4"
         android:layout_marginTop="@dimen/dp_16"
         app:layout_constrainedHeight="true"
         app:layout_constraintTop_toBottomOf="@id/progress_bar_simple_text"
         app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toLeftOf="@+id/progress_bar_percent" />
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/progress_bar_percent"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="@dimen/dp_14"
+        android:textColor="@color/progress_info_text_color"
+        android:gravity="right"
+        android:layout_marginLeft="@dimen/dp_12"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/progress_bar_indicator"
+        app:layout_constraintBottom_toBottomOf="@id/progress_bar_indicator"
         app:layout_constraintRight_toRightOf="parent" />
 
     <com.google.android.material.button.MaterialButton

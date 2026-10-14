@@ -77,6 +77,7 @@ internal object PdfEditProjection {
         open: () -> PdfReader,
         pages: Set<Int>?,
         batchSize: Int,
+        onProgress: (Int) -> Unit = {},
         ensureActive: () -> Unit
     ): Boolean {
         val total = PdfDocument(open().setMemorySavingMode(true)).use { it.numberOfPages }
@@ -91,6 +92,7 @@ internal object PdfEditProjection {
                 }
             }
             if (found) return true
+            onProgress(chunk.size)
         }
         return false
     }
@@ -101,13 +103,14 @@ internal object PdfEditProjection {
         pages: Set<Int>?,
         batchSize: Int,
         ensureActive: () -> Unit
-    ): Int = clearLayers({ PdfReader(input) }, output, pages, batchSize, ensureActive)
+    ): Int = clearLayers({ PdfReader(input) }, output, pages, batchSize, ensureActive = ensureActive)
 
     fun clearLayers(
         open: () -> PdfReader,
         output: File,
         pages: Set<Int>?,
         batchSize: Int,
+        onProgress: (Int) -> Unit = {},
         ensureActive: () -> Unit
     ): Int {
         val total = PdfDocument(open().setMemorySavingMode(true)).use { it.numberOfPages }
@@ -139,6 +142,7 @@ internal object PdfEditProjection {
                     destination.flushCopiedObjects(src)
                 }
                 for (number in from..to) destination.getPage(number).flush()
+                onProgress(to - from + 1)
                 from = to + 1
             }
         }
@@ -152,6 +156,7 @@ internal object PdfEditProjection {
         editedPlp: File,
         output: File,
         batchSize: Int,
+        onProgress: (Int) -> Unit = {},
         ensureActive: () -> Unit
     ): Int {
         val bySource = HashMap<Int, MutableList<Edit>>()
@@ -188,6 +193,7 @@ internal object PdfEditProjection {
                     }
                 }
             }
+            onProgress(to - from + 1)
             from = to + 1
         }
         if (bySource.isEmpty() && removals.isEmpty()) return 0
@@ -222,6 +228,7 @@ internal object PdfEditProjection {
                     PdfCopySupport.flushCopiedObjects(destination, src)
                 }
                 for (pageNumber in start..end) destination.getPage(pageNumber).flush()
+                onProgress(end - start + 1)
                 start = end + 1
             }
         }

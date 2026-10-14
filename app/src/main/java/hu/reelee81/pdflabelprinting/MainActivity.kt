@@ -33,6 +33,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.StrictMode
+import android.os.SystemClock
 import android.print.PrintAttributes
 import android.print.PrintManager
 import android.provider.OpenableColumns
@@ -132,6 +133,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Collections.newSetFromMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.Date
 import java.util.Locale
@@ -139,6 +141,7 @@ import java.util.WeakHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -244,6 +247,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEEP_RECENT_EXPORTS = 0
         private const val MAX_IMG_W = 8411
         private const val MAX_IMG_H = 8411
+        private const val PROGRESS_TICK_MS = 500L
+        private const val PROGRESS_REVEAL_MS = 5_000L
+        private const val PROGRESS_IDLE_MS = 1_000L
+        private const val PROGRESS_NOTIFY_MS = 1_000L
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -334,6 +341,36 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var deferOrientationUnlockUntilThumbnailsReady: Boolean = false
     @Volatile private var deferredOrientationUnlockRequested: Boolean = false
     @Volatile private var reloadThumbnailsGeneration: Long = 0L
+    @Volatile private var progressTotal = 0L
+    @Volatile private var progressIdleSince = 0L
+    @Volatile private var progressGeneration = 0L
+    @Volatile private var progressAccepting = true
+
+    private val progressDone = AtomicLong(0L)
+    private var progressStartedAt = 0L
+    private var progressLastPercent = -1
+    private var progressMessage = ""
+    private var progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
+    private var progressNotifiedAt = 0L
+    private val progressTicker = object : Runnable {
+        override fun run() {
+            if (renderProgress()) binding.root.postDelayed(this, PROGRESS_TICK_MS)
+        }
+    }
+
+    private inner class ProgressStage(private val generation: Long) {
+        fun advance(units: Int) {
+            if (generation != progressGeneration) throw CancellationException()
+            progressDone.addAndGet(units.toLong())
+            progressIdleSince = 0L
+        }
+
+        fun idle() {
+            if (generation == progressGeneration && progressIdleSince == 0L) {
+                progressIdleSince = SystemClock.uptimeMillis()
+            }
+        }
+    }
 
     private val prefsBackupLock = Any()
     private val rvHeightUpdateRunnable = Runnable {
@@ -3185,6 +3222,7 @@ class MainActivity : AppCompatActivity() {
 
         runCatching {
             if (::binding.isInitialized) {
+                binding.root.removeCallbacks(progressTicker)
                 binding.overlayProgressDialog.visibility = View.GONE
                 binding.overlayProgressDialogUpdateUi.visibility = View.GONE
             }
@@ -3821,6 +3859,7 @@ class MainActivity : AppCompatActivity() {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_ui) }
 
         PdfProcessingForegroundService.start(this, resolvedMessage)
+        resetProgress(resolvedMessage)
 
         runCatching {
             val panel = binding.overlayProgressDialogUpdateUiPanel
@@ -3838,6 +3877,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideInProgressIfShownUpdateUI() {
         PdfProcessingForegroundService.stop(this)
+        binding.root.removeCallbacks(progressTicker)
 
         runCatching {
             binding.overlayProgressDialogUpdateUi.visibility = View.GONE
@@ -3945,6 +3985,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun cancelLongRunningWorkAndCleanup() {
         isSigningCancelled = true
+        progressGeneration++
+        progressAccepting = false
 
         reloadThumbnailsGeneration++
 
@@ -4085,6 +4127,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            progressAccepting = true
             reloadThumbnailsFromPlp(
                 targetIndex = thumbFirstBeforeCancel.takeIf { it != RecyclerView.NO_POSITION },
                 targetOffsetPx = thumbOffsetBeforeCancel,
@@ -4120,12 +4163,19 @@ class MainActivity : AppCompatActivity() {
 
             if (!wasShowing) {
                 backupTempFilesBeforeLongOperation()
+                progressAccepting = true
+                resetProgress(resolvedMessage)
             }
+            progressMessage = resolvedMessage
+            progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
 
             val panel = binding.overlayProgressDialogPanel
             panel.removeAllViews()
             val view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, panel, false)
             view.findViewById<MaterialTextView>(R.id.progress_bar_simple_text)?.text = resolvedMessage
+            view.findViewById<MaterialTextView>(R.id.progress_bar_percent)?.let { percent ->
+                percent.minWidth = ceil(percent.paint.measureText(getString(R.string.progress_percent, 100))).toInt()
+            }
 
             val btnCancel = view.findViewById<MaterialButton>(R.id.progress_bar_cancel)
             btnCancel?.setOnClickListener {
@@ -4146,8 +4196,83 @@ class MainActivity : AppCompatActivity() {
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
+    private fun resetProgress(message: String) {
+        progressDone.set(0L)
+        progressTotal = 0L
+        progressStartedAt = SystemClock.uptimeMillis()
+        progressIdleSince = progressStartedAt
+        progressLastPercent = -1
+        progressMessage = message
+        progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
+        progressNotifiedAt = 0L
+        binding.root.removeCallbacks(progressTicker)
+        binding.root.postDelayed(progressTicker, PROGRESS_TICK_MS)
+    }
+
+    private fun progressStage(remaining: Long): ProgressStage {
+        if (!progressAccepting) return ProgressStage(-1L)
+        val stage = ProgressStage(progressGeneration)
+        progressTotal = progressDone.get() + remaining
+        return stage
+    }
+
+    private fun layoutUnits(sourcePages: Int): Long {
+        val cfg = currentNupConfigFromInputs()
+        val per = (cfg.rows * cfg.cols).coerceAtLeast(1)
+        val outPages = (sourcePages + per - 1) / per
+        return sourcePages.toLong() + outPages + if (per == 1) sourcePages else 0
+    }
+
+    private fun renderProgress(): Boolean {
+        if (!::binding.isInitialized || isFinishing || isDestroyed) return false
+        val linear = binding.overlayProgressDialog.isVisible
+        if (!linear && !binding.overlayProgressDialogUpdateUi.isVisible) return false
+
+        val now = SystemClock.uptimeMillis()
+        if (now - progressStartedAt < PROGRESS_REVEAL_MS) return true
+
+        val total = progressTotal
+        val done = min(progressDone.get(), total)
+        val idleSince = progressIdleSince
+        val measuring = total > 0 && done > 0 && (idleSince == 0L || now - idleSince < PROGRESS_IDLE_MS)
+        val percent = if (measuring) {
+            max(progressLastPercent, (done * 100 / total).toInt()).also { progressLastPercent = it }
+        } else {
+            PdfProcessingForegroundService.PROGRESS_INDETERMINATE
+        }
+
+        val indicator: BaseProgressIndicator<*>?
+        val label: TextView?
+        if (linear) {
+            indicator = binding.overlayProgressDialogPanel.findViewById(R.id.progress_bar_indicator)
+            label = binding.overlayProgressDialogPanel.findViewById(R.id.progress_bar_percent)
+        } else {
+            indicator = binding.overlayProgressDialogUpdateUiPanel.findViewById(R.id.progress_bar_indicator_update_ui)
+            label = binding.overlayProgressDialogUpdateUiPanel.findViewById(R.id.progress_bar_update_ui_percent)
+        }
+        if (percent >= 0) {
+            if (indicator?.isIndeterminate == true) indicator.isIndeterminate = false
+            indicator?.setProgressCompat(percent, true)
+            label?.text = getString(R.string.progress_percent, percent)
+            label?.visibility = View.VISIBLE
+        } else {
+            if (indicator?.isIndeterminate == false) indicator.isIndeterminate = true
+            label?.visibility = if (linear) View.GONE else View.INVISIBLE
+        }
+
+        if (percent != progressNotified &&
+            (percent < 0 || progressNotified < 0 || now - progressNotifiedAt >= PROGRESS_NOTIFY_MS)
+        ) {
+            progressNotified = percent
+            progressNotifiedAt = now
+            PdfProcessingForegroundService.start(this, progressMessage, percent)
+        }
+        return true
+    }
+
     private fun hideInProgressIfShown() {
         PdfProcessingForegroundService.stop(this)
+        binding.root.removeCallbacks(progressTicker)
 
         runCatching {
             binding.overlayProgressDialog.visibility = View.GONE
@@ -4830,16 +4955,23 @@ class MainActivity : AppCompatActivity() {
 
         val pageBatch = batchValueOrDefault1()
 
+        fun totalPagesOf(path: String, pw: ByteArray?): Int =
+            PdfDocument(rdr(path, pw)).use { it.numberOfPages }
+
+        val sourceTemp = sourceTempFile()
+        val inputs = buildList {
+            if (sourceTemp.exists()) add(sourceTemp.absolutePath to null)
+            for (srcPdf in srcPdfs) add(srcPdf.absolutePath to passwordBytes)
+        }.map { (path, pw) -> Triple(path, pw, totalPagesOf(path, pw)) }
+        val allPages = inputs.sumOf { it.third }
+        val progress = progressStage(allPages + layoutUnits(allPages))
+
         PdfDocument(
             PdfWriter(outWork.absolutePath, writerProps())
         ).use { dest ->
             dest.setFlushUnusedObjects(true)
 
-            fun totalPagesOf(path: String, pw: ByteArray?): Int =
-                PdfDocument(rdr(path, pw)).use { it.numberOfPages }
-
-            fun copyInBatches(inputPath: String, pw: ByteArray?) {
-                val total = totalPagesOf(inputPath, pw)
+            fun copyInBatches(inputPath: String, pw: ByteArray?, total: Int) {
                 var from = 1
                 while (from <= total) {
                     val to = min(from + pageBatch - 1, total)
@@ -4854,13 +4986,13 @@ class MainActivity : AppCompatActivity() {
                         val p = dest.numberOfPages - i
                         if (p >= 1) runCatching { dest.getPage(p).flush() }
                     }
+                    progress.advance(added)
                     from = to + 1
                 }
             }
 
-            val sourceTemp = sourceTempFile()
-            if (sourceTemp.exists()) copyInBatches(sourceTemp.absolutePath, null)
-            for (srcPdf in srcPdfs) copyInBatches(srcPdf.absolutePath, passwordBytes)
+            for ((path, pw, total) in inputs) copyInBatches(path, pw, total)
+            progress.idle()
         }
 
         val target = sourceTempFile()
@@ -4882,12 +5014,14 @@ class MainActivity : AppCompatActivity() {
         openFailure: Exception?,
         ensureActive: () -> Unit
     ) {
+        val doneBefore = progressDone.get()
         val failure = openFailure ?: try {
             appendPdfToSourceTemp(listOf(srcPdf), passwordBytes)
             return
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            progressDone.set(doneBefore)
             e
         }
 
@@ -4967,6 +5101,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else emptySet()
 
+                val progress = progressStage(oldPageCount + layoutUnits(oldPageCount + 1))
+
                 PdfDocument(PdfWriter(outWork.absolutePath, writerProps())).use { dest ->
                     dest.setFlushUnusedObjects(true)
 
@@ -4987,6 +5123,7 @@ class MainActivity : AppCompatActivity() {
                                 val p = dest.numberOfPages - i
                                 if (p >= 1) runCatching { dest.getPage(p).flush() }
                             }
+                            progress.advance(added)
 
                             from = to + 1
                         }
@@ -4996,6 +5133,7 @@ class MainActivity : AppCompatActivity() {
 
                     val newPage = dest.addNewPage(firstPageSize)
                     runCatching { newPage.flush() }
+                    progress.idle()
                 }
 
                 val target = sourceTempFile()
@@ -5330,6 +5468,7 @@ class MainActivity : AppCompatActivity() {
 
                         val widths  = FloatArray(totalSrcPages) { fallbackW }
                         val heights = FloatArray(totalSrcPages) { fallbackH }
+                        val progress = progressStage(totalSrcPages.toLong())
 
                         var startPage = 0
                         while (startPage < totalSrcPages) {
@@ -5359,8 +5498,10 @@ class MainActivity : AppCompatActivity() {
                                 runCatching { pdfDoc.close() }
                             }
 
+                            progress.advance(endExclusive - startPage)
                             startPage = endExclusive
                         }
+                        progress.idle()
 
                         for (g in 0 until plpPages) {
                             val pageNumberText = if (per == 1) {
@@ -5616,6 +5757,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val totalSrcPages = sourceTempPageCount()
+                val progress = progressStage(totalSrcPages + layoutUnits(totalSrcPages))
 
                 val outWork = sourceWorkFile()
                 if (outWork.exists()) outWork.delete()
@@ -5638,6 +5780,7 @@ class MainActivity : AppCompatActivity() {
                                 val p = dest.numberOfPages - i
                                 if (p >= 1) runCatching { dest.getPage(p).flush() }
                             }
+                            progress.advance(added)
                             from = to + 1
                         }
                     }
@@ -5675,6 +5818,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     flushRunIfAny()
+                    progress.idle()
                 }
 
                 if (srcFile.exists()) srcFile.delete()
@@ -6217,6 +6361,7 @@ class MainActivity : AppCompatActivity() {
                 val groupEnd = min(total - 1, groupStart + per - 1)
                 val toSkipCount = if (groupStart <= groupEnd) (groupEnd - groupStart + 1) else 0
                 val remaining = total - toSkipCount
+                val progress = progressStage(remaining + layoutUnits(remaining))
 
                 if (remaining <= 0) {
                     clearCacheDir()
@@ -6251,6 +6396,7 @@ class MainActivity : AppCompatActivity() {
                             val p = dest.numberOfPages - i
                             if (p >= 1) runCatching { dest.getPage(p).flush() }
                         }
+                        progress.advance(added)
                         from = to + 1
                     }
                 }
@@ -6287,6 +6433,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     runStart?.let { flushRun(it, currentRunEnd) }
+                    progress.idle()
                 }
 
                 if (source.exists()) source.delete()
@@ -6390,6 +6537,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val remaining = total - toSkip.size
+                val progress = progressStage(remaining + layoutUnits(remaining))
                 if (remaining <= 0) {
                     clearCacheDir()
                     sourceRotation = IntArray(0)
@@ -6423,6 +6571,7 @@ class MainActivity : AppCompatActivity() {
                             val p = dest.numberOfPages - i
                             if (p >= 1) runCatching { dest.getPage(p).flush() }
                         }
+                        progress.advance(added)
                         from = to + 1
                     }
                 }
@@ -6459,6 +6608,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     runStart?.let { flushRun(it, currentRunEnd) }
+                    progress.idle()
                 }
 
                 if (source.exists()) source.delete()
@@ -6768,20 +6918,24 @@ class MainActivity : AppCompatActivity() {
                     }
                 } ?: throw IOException(getString(R.string.input_stream_is_null))
 
-                PdfDocument(rdr(work.absolutePath)).use { }
+                val editedPages = PdfDocument(rdr(work.absolutePath)).use { it.numberOfPages }
+                val sourcePages = sourceTempPageCount()
+                val progress = progressStage(editedPages + sourcePages + layoutUnits(sourcePages))
 
                 val projected = try {
                     PdfEditProjection.project(
                         source = sourceTempFile(),
                         editedPlp = work,
                         output = projectedSource,
-                        batchSize = batchValueOrDefault1()
+                        batchSize = batchValueOrDefault1(),
+                        onProgress = progress::advance
                     ) { ensureActive() }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: PdfEditProjection.NotProjectableException) {
                     -1
                 }
+                progress.idle()
 
                 when {
                     projected > 0 -> {
@@ -7319,6 +7473,7 @@ class MainActivity : AppCompatActivity() {
             val batch = batchValueOrDefault1()
             PdfDocument(rdr(file.absolutePath)).use { src ->
                 val total = src.numberOfPages
+                val progress = progressStage(total.toLong())
                 var from = 1
                 while (from <= total) {
                     val to = min(from + batch - 1, total)
@@ -7329,8 +7484,10 @@ class MainActivity : AppCompatActivity() {
                         val p = dest.numberOfPages - i
                         if (p >= 1) runCatching { dest.getPage(p).flush() }
                     }
+                    progress.advance(added)
                     from = to + 1
                 }
+                progress.idle()
             }
         }
 
@@ -7385,6 +7542,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
+            val progress = progressStage(
+                totalSrcPages.toLong() + totalOutPages + if (per == 1) totalSrcPages else 0
+            )
 
             val outPagesPerChunk = batchValueOrDefault1()
             val partFiles = mutableListOf<File>()
@@ -7621,6 +7781,7 @@ class MainActivity : AppCompatActivity() {
 
                             idxLocal++
                             globalIdx++
+                            progress.advance(1)
                         }
                     }
                 }
@@ -7656,10 +7817,12 @@ class MainActivity : AppCompatActivity() {
                             val p = destDoc.numberOfPages - i
                             if (p >= 1) runCatching { destDoc.getPage(p).flush() }
                         }
+                        progress.advance(count)
 
                         from = to + 1
                     }
                 }
+                progress.idle()
             }
 
             partFiles.forEach { runCatching { it.delete() } }
@@ -8067,6 +8230,12 @@ class MainActivity : AppCompatActivity() {
             val tmpSigned = mutableMapOf<Int, File>()
 
             try {
+                val progress = run {
+                    val plpPages = PdfDocument(rdr(plp.absolutePath)).use { it.numberOfPages }
+                    val sourcePages = sourceTempPageCount()
+                    progressStage(selectedPlpIndices.size + plpPages + sourcePages + layoutUnits(sourcePages))
+                }
+
                 ParcelFileDescriptor.open(plp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                     PdfRenderer(pfd).use { renderer ->
                         for (idx in selectedPlpIndices) {
@@ -8220,6 +8389,7 @@ class MainActivity : AppCompatActivity() {
                                 if (!bitmapForExport.isRecycled) bitmapForExport.recycle()
                             }
 
+                            progress.advance(1)
                             yield()
                             delay(5L.milliseconds)
                         }
@@ -8251,6 +8421,7 @@ class MainActivity : AppCompatActivity() {
                                 val p = destDoc.numberOfPages - i
                                 if (p >= 1) runCatching { destDoc.getPage(p).flush() }
                             }
+                            progress.advance(added)
                             from = to + 1
                         }
                     }
@@ -8273,11 +8444,13 @@ class MainActivity : AppCompatActivity() {
                                 runCatching { PdfCopySupport.flushCopiedObjects(destDoc, replDoc) }
                             }
                             runCatching { destDoc.lastPage?.flush() }
+                            progress.advance(1)
                         } else {
                             if (runStart == null) runStart = p
                         }
                     }
                     runStart?.let { copyRange1BasedPaged(plp.absolutePath, it, totalPlpPages) }
+                    progress.idle()
                 }
 
                 if (isSigningCancelled) {
@@ -8352,6 +8525,8 @@ class MainActivity : AppCompatActivity() {
             if (outWorkSrc.exists()) outWorkSrc.delete()
 
             val pageBatch = batchValueOrDefault1()
+            val totalPages = PdfDocument(rdr(srcFile.absolutePath)).use { it.numberOfPages }
+            val progress = progressStage(totalPages + layoutUnits(totalPages))
 
             fun copyRange1BasedPaged(srcPath: String, dest: PdfDocument, from1: Int, to1: Int) {
                 var from = from1
@@ -8366,6 +8541,7 @@ class MainActivity : AppCompatActivity() {
                         val p = dest.numberOfPages - i
                         if (p >= 1) runCatching { dest.getPage(p).flush() }
                     }
+                    progress.advance(added)
                     from = to + 1
                 }
             }
@@ -8374,7 +8550,6 @@ class MainActivity : AppCompatActivity() {
             PdfDocument(PdfWriter(outWorkSrc.absolutePath, writerProps)).use { destSrcDoc ->
                 destSrcDoc.setFlushUnusedObjects(true)
 
-                val totalPages = PdfDocument(rdr(srcFile.absolutePath)).use { it.numberOfPages }
                 originalTotal = totalPages
                 val per = perGroup()
 
@@ -8401,6 +8576,7 @@ class MainActivity : AppCompatActivity() {
 
                         val groupStart = groupIndex * per + 1
                         val groupEnd = min(totalPages, groupStart + per - 1)
+                        progress.advance(groupEnd - groupStart + 1)
                         p = groupEnd + 1
                     } else {
                         if (runStart == null) runStart = p
@@ -8409,6 +8585,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 runStart?.let { copyRange1BasedPaged(srcFile.absolutePath, destSrcDoc, it, totalPages) }
+                progress.idle()
             }
 
             if (isSigningCancelled) {

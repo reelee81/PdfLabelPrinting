@@ -20,6 +20,9 @@ class ReadOnlyPdfViewerFragment : PdfViewerFragment() {
     val isPageNavigationInProgress: Boolean
         get() = pageNavigator.isInProgress
 
+    val isDocumentLoading: Boolean
+        get() = pageNavigator.isLoading
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pageNavigator.restore(savedInstanceState)

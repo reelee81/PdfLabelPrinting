@@ -290,6 +290,7 @@
     <style name="Widget.PdfLabelPrinting.LinearProgress" parent="Widget.Material3.LinearProgressIndicator">
         <item name="indicatorColor">@color/progress_indicator_color</item>
         <item name="trackColor">@color/progress_track_color</item>
+        <item name="trackStopIndicatorSize">@dimen/dp_0</item>
     </style>
 
     <!-- ALERT DIALOG/POPUP DIALOG -->

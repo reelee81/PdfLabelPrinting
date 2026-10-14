@@ -34,6 +34,7 @@ class PdfViewer : PdfActivity() {
 
     private var currentUri: Uri? = null
     private var hasEditedDocument = false
+    private var reloadingEditedDocument = false
 
     private val editLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val fragment = supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment
@@ -47,6 +48,7 @@ class PdfViewer : PdfActivity() {
         if (result.resultCode == RESULT_OK && editedUri != null) {
             currentUri = editedUri
             hasEditedDocument = true
+            reloadingEditedDocument = true
             fragment?.loadDocumentAtPage(editedUri, returnedPageIndex ?: fragment.currentPageIndex)
 
             findViewById<MaterialToolbar>(R.id.toolbar).title = resolveDisplayName(editedUri)
@@ -132,6 +134,16 @@ class PdfViewer : PdfActivity() {
     override fun isPdfNavigationInProgress(): Boolean =
         (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
             ?.isPageNavigationInProgress == true
+
+    override fun onPdfNavigationStateChanged(inProgress: Boolean) {
+        if (!inProgress) reloadingEditedDocument = false
+    }
+
+    override fun leavesOnPdfWaitCancel(): Boolean = reloadingEditedDocument && isPdfNavigationInProgress()
+
+    override fun isPdfDocumentLoading(): Boolean =
+        (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
+            ?.isDocumentLoading == true
 
     private fun setEditedDocumentResult(uri: Uri) {
         setResult(

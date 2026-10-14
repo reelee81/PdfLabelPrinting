@@ -38,71 +38,36 @@
         android:id="@+id/overlay_pdf_navigation_wait"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:background="@color/pdf_navigation_wait_scrim"
+        android:background="@color/dialog_overlay_background_color"
         android:clickable="true"
         android:contentDescription="@string/pdf_navigation_wait"
         android:elevation="@dimen/dp_9999_overlay"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:importantForAccessibility="yes"
+        android:paddingLeft="@dimen/dp_16"
+        android:paddingTop="@dimen/dp_16"
+        android:paddingRight="@dimen/dp_16"
+        android:paddingBottom="@dimen/dp_16"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:id="@+id/overlay_pdf_navigation_wait_panel"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="@dimen/dp_16"
-            android:layout_marginRight="@dimen/dp_16"
-            android:gravity="center_horizontal"
+            android:background="@drawable/bg_overlay_dialog_panel"
             android:orientation="vertical"
-            app:layout_constrainedWidth="true"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
-            app:layout_constraintTop_toTopOf="parent">
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintWidth_max="@dimen/dp_9999_overlay">
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/pdf_navigation_wait_caption"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:fontFamily="@font/roboto_medium"
-                    android:gravity="end"
-                    android:importantForAccessibility="no"
-                    android:text="@string/pdf_navigation_wait"
-                    android:textColor="@color/white"
-                    android:textSize="@dimen/dp_18"
-                    android:textStyle="normal" />
-
-                <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/pdf_navigation_wait_dots"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/dp_4"
-                    android:fontFamily="@font/roboto_medium"
-                    android:importantForAccessibility="no"
-                    android:text="@string/pdf_navigation_wait_dots"
-                    android:textColor="@color/white"
-                    android:textSize="@dimen/dp_18"
-                    android:textStyle="normal" />
-            </LinearLayout>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/pdf_navigation_wait_cancel"
-                style="@style/PdfLabelPrinting.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/dp_12"
-                android:text="@string/cancel_text"
-                android:visibility="gone" />
+            <include layout="@layout/progress_dialog" />
         </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
 

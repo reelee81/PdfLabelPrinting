@@ -24,6 +24,9 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
     val isPageNavigationInProgress: Boolean
         get() = pageNavigator.isInProgress
 
+    val isDocumentLoading: Boolean
+        get() = pageNavigator.isLoading
+
     val visiblePageIndices: List<Int>
         get() = pageNavigator.visiblePageIndices
 
@@ -53,8 +56,26 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
         pageNavigator.bind(pdfView)
     }
 
+    override fun onResume() {
+        super.onResume()
+        hideToolboxUntilEditing()
+    }
+
+    private fun hideToolboxUntilEditing() {
+        if (!isEditModeEnabled) isToolboxVisible = false
+    }
+
+    override fun onRequestImmersiveMode(enterImmersive: Boolean) {
+        if (isEditModeEnabled) {
+            super.onRequestImmersiveMode(enterImmersive)
+        } else {
+            isToolboxVisible = false
+        }
+    }
+
     override fun onLoadDocumentSuccess(document: PdfDocument) {
         super.onLoadDocumentSuccess(document)
+        hideToolboxUntilEditing()
         pageNavigator.onDocumentLoaded(document)
         (activity as? PdfEditorActivity)?.onEditorDocumentLoaded()
     }
