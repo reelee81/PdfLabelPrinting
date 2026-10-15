@@ -53,6 +53,7 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
 
     override fun onPdfViewCreated(pdfView: PdfView) {
         super.onPdfViewCreated(pdfView)
+        pdfView.isSaveEnabled = false
         pageNavigator.bind(pdfView)
     }
 

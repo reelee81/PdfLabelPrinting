@@ -131,6 +131,7 @@ import java.io.IOException
 import java.io.StringReader
 import java.io.StringWriter
 import java.text.SimpleDateFormat
+import java.util.BitSet
 import java.util.Collections.newSetFromMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -146,6 +147,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -251,6 +253,7 @@ class MainActivity : AppCompatActivity() {
         private const val PROGRESS_REVEAL_MS = 5_000L
         private const val PROGRESS_IDLE_MS = 1_000L
         private const val PROGRESS_NOTIFY_MS = 1_000L
+        private const val PENDING_INTENT_RETRY_MS = 500L
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -388,6 +391,8 @@ class MainActivity : AppCompatActivity() {
     )
 
     private val activeJobs = CopyOnWriteArrayList<Job>()
+    private val pendingIncomingIntents = ArrayDeque<Intent>()
+    private val pendingIncomingIntentRetry = Runnable { processPendingIncomingIntents() }
     private val plpSizedDialogs: MutableSet<AlertDialog> = newSetFromMap(WeakHashMap())
 
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -939,13 +944,39 @@ class MainActivity : AppCompatActivity() {
         }
 
         val intent = intent
+        val launchedFromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
 
-        handleIncomingShareIntent(intent)
+        if (savedInstanceState == null && !launchedFromHistory) {
+            handleIncomingShareIntent(intent)
+        }
         setIntent(Intent())
 
+        savedInstanceState?.getIntArray("state_last_built_nup")
+            ?.takeIf { it.size == 7 }
+            ?.let { values ->
+                lastBuiltNupConfig = NupConfig(
+                    rows = values[0],
+                    cols = values[1],
+                    marginMm = values[2],
+                    isLandscape = values[3] != 0,
+                    drawFrame = values[4] != 0,
+                    scaleIndividually = values[5] != 0,
+                    fitIndividually = values[6] != 0
+                )
+            }
+
         val bundleIndicesToSelect: Set<Int>? = savedInstanceState
-            ?.getIntegerArrayList("state_selected_idx")
-            ?.toSet()
+            ?.getByteArray("state_selected_bits")
+            ?.let { bytes ->
+                val bits = BitSet.valueOf(bytes)
+                buildSet {
+                    var idx = bits.nextSetBit(0)
+                    while (idx >= 0) {
+                        add(idx)
+                        idx = bits.nextSetBit(idx + 1)
+                    }
+                }
+            }
             ?.takeIf { it.isNotEmpty() }
 
         savedInstanceState
@@ -958,6 +989,21 @@ class MainActivity : AppCompatActivity() {
 
         runCatching {
             val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+
+            if (savedInstanceState == null) {
+                synchronized(prefsBackupLock) {
+                    sp.edit {
+                        remove(KEY_THEME_RESTORE_FIRST)
+                        remove(KEY_THEME_RESTORE_OFFSET)
+                        remove(KEY_THEME_RESTORE_SELECTED_CSV)
+                        remove(KEY_THEME_RESTORE_ROTATION_CSV)
+                        remove(KEY_THEME_RESTORE_POSITION_CSV)
+                        remove(KEY_THEME_RESTORE_CROP)
+                        remove(KEY_THEME_RESTORE_NSV_Y)
+                        putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+                    }
+                }
+            }
 
             val restFirst: Int
             val restOffset: Int
@@ -1378,38 +1424,52 @@ class MainActivity : AppCompatActivity() {
         val selectedIdx = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
         if (selectedIdx.isNotEmpty()) {
-            outState.putIntegerArrayList("state_selected_idx", ArrayList(selectedIdx))
+            val selectedBits = BitSet()
+            for (idx in selectedIdx) selectedBits.set(idx)
+            outState.putByteArray("state_selected_bits", selectedBits.toByteArray())
+        }
+        lastBuiltNupConfig?.let { cfg ->
+            outState.putIntArray(
+                "state_last_built_nup",
+                intArrayOf(
+                    cfg.rows,
+                    cfg.cols,
+                    cfg.marginMm,
+                    if (cfg.isLandscape) 1 else 0,
+                    if (cfg.drawFrame) 1 else 0,
+                    if (cfg.scaleIndividually) 1 else 0,
+                    if (cfg.fitIndividually) 1 else 0
+                )
+            )
         }
 
-        if (isChangingConfigurations) {
-            runCatching {
-                val lm = binding.rvThumbnails.layoutManager as? LinearLayoutManager
-                val first = lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
-                val offset = if (first != RecyclerView.NO_POSITION) {
-                    lm?.findViewByPosition(first)?.top ?: 0
-                } else 0
+        runCatching {
+            val lm = binding.rvThumbnails.layoutManager as? LinearLayoutManager
+            val first = lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+            val offset = if (first != RecyclerView.NO_POSITION) {
+                lm?.findViewByPosition(first)?.top ?: 0
+            } else 0
 
-                val nsv = findViewById<NestedScrollView>(R.id.root_scroll)
-                val nsvY = nsv?.scrollY ?: -1
+            val nsv = findViewById<NestedScrollView>(R.id.root_scroll)
+            val nsvY = nsv?.scrollY ?: -1
 
-                val csv = selectedIdx.joinToString(",")
-                val rotationCsv = sourceRotation.joinToString(",")
+            val csv = selectedIdx.joinToString(",")
+            val rotationCsv = sourceRotation.joinToString(",")
 
-                val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                synchronized(prefsBackupLock) {
-                    sp.edit {
-                        putInt(KEY_THEME_RESTORE_FIRST, first)
-                        putInt(KEY_THEME_RESTORE_OFFSET, offset)
-                        putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
-                        putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
-                        putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
-                        putString(KEY_THEME_RESTORE_CROP, PdfCrops.encode(sourceCrop))
-                        putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
-                        putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
-                    }
+            val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            synchronized(prefsBackupLock) {
+                sp.edit {
+                    putInt(KEY_THEME_RESTORE_FIRST, first)
+                    putInt(KEY_THEME_RESTORE_OFFSET, offset)
+                    putString(KEY_THEME_RESTORE_SELECTED_CSV, csv)
+                    putString(KEY_THEME_RESTORE_ROTATION_CSV, rotationCsv)
+                    putString(KEY_THEME_RESTORE_POSITION_CSV, sourcePosition.joinToString(","))
+                    putString(KEY_THEME_RESTORE_CROP, PdfCrops.encode(sourceCrop))
+                    putInt(KEY_THEME_RESTORE_NSV_Y, nsvY)
+                    putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, true)
                 }
-            }.onFailure {
             }
+        }.onFailure {
         }
     }
 
@@ -1448,12 +1508,30 @@ class MainActivity : AppCompatActivity() {
         setIntent(Intent())
     }
 
+    private fun isBusyForIncomingIntent(): Boolean =
+        binding.overlayProgressDialog.isVisible ||
+            binding.overlayProgressDialogUpdateUi.isVisible ||
+            binding.overlayDialogPassword.isVisible ||
+            activeJobs.any { it.isActive }
+
+    private fun processPendingIncomingIntents() {
+        binding.root.removeCallbacks(pendingIncomingIntentRetry)
+        if (pendingIncomingIntents.isEmpty() || isFinishing || isDestroyed) return
+        if (isBusyForIncomingIntent()) {
+            binding.root.postDelayed(pendingIncomingIntentRetry, PENDING_INTENT_RETRY_MS)
+            return
+        }
+        handleIncomingShareIntent(pendingIncomingIntents.removeFirst())
+        if (pendingIncomingIntents.isNotEmpty()) {
+            binding.root.postDelayed(pendingIncomingIntentRetry, PENDING_INTENT_RETRY_MS)
+        }
+    }
+
     private fun handleIncomingShareIntent(intent: Intent) {
-        if (::binding.isInitialized && (
-                    binding.overlayProgressDialog.isVisible ||
-                            binding.overlayProgressDialogUpdateUi.isVisible
-                    )
-        ) {
+        if (::binding.isInitialized && isBusyForIncomingIntent()) {
+            pendingIncomingIntents.addLast(Intent(intent))
+            binding.root.removeCallbacks(pendingIncomingIntentRetry)
+            binding.root.postDelayed(pendingIncomingIntentRetry, PENDING_INTENT_RETRY_MS)
             return
         }
 
@@ -3223,6 +3301,7 @@ class MainActivity : AppCompatActivity() {
         runCatching {
             if (::binding.isInitialized) {
                 binding.root.removeCallbacks(progressTicker)
+                binding.root.removeCallbacks(pendingIncomingIntentRetry)
                 binding.overlayProgressDialog.visibility = View.GONE
                 binding.overlayProgressDialogUpdateUi.visibility = View.GONE
             }
@@ -3236,7 +3315,7 @@ class MainActivity : AppCompatActivity() {
         signaturePositionEditorRerender = null
         saveCurrentSettings()
         (findViewById<RecyclerView>(R.id.rv_thumbnails).adapter as? ThumbnailAdapter)?.close()
-        if (!isChangingConfigurations) clearCacheDir()
+        if (isFinishing && !isChangingConfigurations) clearCacheDir()
         super.onDestroy()
     }
 
@@ -4214,6 +4293,13 @@ class MainActivity : AppCompatActivity() {
         val stage = ProgressStage(progressGeneration)
         progressTotal = progressDone.get() + remaining
         return stage
+    }
+
+    private fun signedPageWeight(highDpi: Boolean, scanEffect: Boolean, grayscale: Boolean): Int {
+        var weight = if (highDpi) 280.0 else 100.0
+        if (scanEffect) weight *= if (highDpi) 1.3 else 1.2
+        if (grayscale) weight *= if (highDpi) 1.15 else 1.1
+        return weight.roundToInt()
     }
 
     private fun layoutUnits(sourcePages: Int): Long {
@@ -8230,10 +8316,18 @@ class MainActivity : AppCompatActivity() {
             val tmpSigned = mutableMapOf<Int, File>()
 
             try {
+                val signedPageWeight = signedPageWeight(
+                    highDpi = selectedDpiIndexForSignature == 1,
+                    scanEffect = applyScanEffect,
+                    grayscale = applyGrayscalePage
+                )
                 val progress = run {
                     val plpPages = PdfDocument(rdr(plp.absolutePath)).use { it.numberOfPages }
                     val sourcePages = sourceTempPageCount()
-                    progressStage(selectedPlpIndices.size + plpPages + sourcePages + layoutUnits(sourcePages))
+                    progressStage(
+                        selectedPlpIndices.size.toLong() * signedPageWeight +
+                            plpPages + sourcePages + layoutUnits(sourcePages)
+                    )
                 }
 
                 ParcelFileDescriptor.open(plp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
@@ -8389,7 +8483,7 @@ class MainActivity : AppCompatActivity() {
                                 if (!bitmapForExport.isRecycled) bitmapForExport.recycle()
                             }
 
-                            progress.advance(1)
+                            progress.advance(signedPageWeight)
                             yield()
                             delay(5L.milliseconds)
                         }

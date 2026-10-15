@@ -3,6 +3,7 @@ package hu.reelee81.pdflabelprinting
 import com.itextpdf.io.source.PdfTokenizer
 import com.itextpdf.io.source.RandomAccessFileOrArray
 import com.itextpdf.io.source.RandomAccessSourceFactory
+import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfBoolean
 import com.itextpdf.kernel.pdf.PdfDictionary
@@ -16,6 +17,7 @@ import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfResources
 import com.itextpdf.kernel.pdf.PdfStream
 import com.itextpdf.kernel.pdf.PdfWriter
+import com.itextpdf.kernel.pdf.WriterProperties
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
@@ -38,6 +40,7 @@ internal object PdfEditProjection {
     private val CELLS = PdfName("Cells")
     private const val NAME_PREFIX = "PLE"
     private const val MAX_DEPTH = 8
+    private const val SCAN_BATCH_FACTOR = 10
 
     fun markPlpPage(page: PdfPage, cells: List<Cell>) {
         val streams = page.contentStreamCount
@@ -116,7 +119,7 @@ internal object PdfEditProjection {
         val total = PdfDocument(open().setMemorySavingMode(true)).use { it.numberOfPages }
         val batch = batchSize.coerceAtLeast(1)
         var cleared = 0
-        PdfDocument(PdfWriter(output)).use { destination ->
+        PdfDocument(PdfWriter(output.absolutePath, writerProperties())).use { destination ->
             destination.setFlushUnusedObjects(true)
             var from = 1
             while (from <= total) {
@@ -163,10 +166,11 @@ internal object PdfEditProjection {
         val removals = HashSet<Int>()
         val plpPages = PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { it.numberOfPages }
         val batch = batchSize.coerceAtLeast(1)
+        val scanBatch = batch * SCAN_BATCH_FACTOR
         var from = 1
         while (from <= plpPages) {
             ensureActive()
-            val to = min(from + batch - 1, plpPages)
+            val to = min(from + scanBatch - 1, plpPages)
             PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { pdf ->
                 for (number in from..to) {
                     val page = pdf.getPage(number)
@@ -202,7 +206,7 @@ internal object PdfEditProjection {
         if ((bySource.keys + removals).any { it !in 0 until sourcePages }) {
             throw NotProjectableException("layout record does not match the source")
         }
-        PdfDocument(PdfWriter(output)).use { destination ->
+        PdfDocument(PdfWriter(output.absolutePath, writerProperties())).use { destination ->
             destination.setFlushUnusedObjects(true)
             var start = 1
             while (start <= sourcePages) {
@@ -254,6 +258,11 @@ internal object PdfEditProjection {
         }
         page.pdfObject.setModified()
     }
+
+    fun writerProperties(): WriterProperties =
+        WriterProperties()
+            .setFullCompressionMode(true)
+            .setCompressionLevel(CompressionConstants.BEST_SPEED)
 
     private fun layersOf(resources: PdfDictionary?): List<PdfStream> {
         val result = ArrayList<PdfStream>()

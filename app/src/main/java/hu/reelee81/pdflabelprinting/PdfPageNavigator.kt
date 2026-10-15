@@ -84,7 +84,8 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         val pending = if (savedInstanceState.containsKey(STATE_PENDING_PAGE)) {
             savedInstanceState.getInt(STATE_PENDING_PAGE)
         } else null
-        state.restore(savedInstanceState.getInt(STATE_VISIBLE_PAGE, 0), pending)
+        val visible = savedInstanceState.getInt(STATE_VISIBLE_PAGE, 0)
+        state.restore(visible, pending ?: visible)
     }
 
     fun save(outState: Bundle) {

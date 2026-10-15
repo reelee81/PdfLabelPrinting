@@ -518,7 +518,10 @@ class PdfEditorActivity : PdfActivity() {
     }
 
     private fun CoroutineScope.flattenAnnotationsInto(file: File, flatFile: File) {
-        ITextPdfDocument(PdfReader(file.absolutePath), PdfWriter(flatFile.absolutePath)).use { pdf ->
+        ITextPdfDocument(
+            PdfReader(file.absolutePath),
+            PdfWriter(flatFile.absolutePath, PdfEditProjection.writerProperties())
+        ).use { pdf ->
             val flattener = PdfAnnotationFlattener()
             val progress = progressStage(pdf.numberOfPages.toLong())
             for (pageNumber in 1..pdf.numberOfPages) {
