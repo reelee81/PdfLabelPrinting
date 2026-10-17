@@ -86,8 +86,6 @@ internal object PdfEditProjection {
 
     fun isEditLayer(stream: PdfStream): Boolean = privateData(stream)?.getAsBool(LAYER) == true
 
-    fun containsEditLayer(resources: PdfDictionary): Boolean = layersOf(resources, generation = null).isNotEmpty()
-
     fun inverse(m: DoubleArray): DoubleArray? {
         val det = m[0] * m[3] - m[1] * m[2]
         if (!det.isFinite() || abs(det) < 1e-12) return null
@@ -359,7 +357,8 @@ internal object PdfEditProjection {
         val destination = target.document
 
         val existing = sourceLayer(target)
-        val form = existing ?: PdfFormXObject(target.mediaBox).pdfObject.also {
+        if (existing == null) PdfCopySupport.unwrapSingleFormPage(target)
+        val form = existing ?:PdfFormXObject(target.mediaBox).pdfObject.also {
             it.put(PdfName.Resources, PdfDictionary())
             writablePrivateData(it).put(LAYER, PdfBoolean.TRUE)
         }

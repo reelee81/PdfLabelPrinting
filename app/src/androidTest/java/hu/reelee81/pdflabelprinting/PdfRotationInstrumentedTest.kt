@@ -33,6 +33,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleCallback
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -81,13 +82,12 @@ class PdfRotationInstrumentedTest {
         withPdfActivity(PdfViewer::class.java, PdfViewer.EXTRA_URI) { scenario, _ ->
             awaitNavigation(scenario)
             var parent: ViewGroup? = null
-            var firstDots = ""
-            var dotsWidth = 0
             try {
                 scenario.onActivity { activity ->
                     val view = findPdfView(activity)
-                    parent = view.parent as ViewGroup
-                    parent?.suppressLayout(true)
+                    val content = view.parent as ViewGroup
+                    parent = content
+                    content.suppressLayout(true)
                     view.requestLayout()
                     val fragment = activity.supportFragmentManager.fragments.first() as ReadOnlyPdfViewerFragment
                     fragment.scrollToPage(TARGET_PAGE / 2)
@@ -99,22 +99,13 @@ class PdfRotationInstrumentedTest {
                     assertEquals(1, searchButtons.size)
                     searchButtons.single().performClick()
                     assertFalse(fragment.isTextSearchActive)
-                    val dots = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots)
-                    dotsWidth = dots.width
+                    assertWaitIndicatorShown(activity)
                     saveWaitPreview(activity)
-                    firstDots = dots.text.toString()
                 }
-                waitUntil {
-                    var changed = false
-                    scenario.onActivity { activity ->
-                        changed = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString() != firstDots
-                    }
-                    changed
-                }
+                SystemClock.sleep(600)
                 scenario.onActivity { activity ->
                     assertWaitBlocksContent(activity)
-                    val dots = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots)
-                    assertEquals(dotsWidth, dots.width)
+                    assertWaitIndicatorShown(activity)
                 }
             } finally {
                 scenario.onActivity { parent?.suppressLayout(false) }
@@ -122,11 +113,10 @@ class PdfRotationInstrumentedTest {
             awaitNavigation(scenario)
             scenario.onActivity { activity ->
                 assertEquals(View.GONE, activity.findViewById<View>(R.id.overlay_pdf_navigation_wait).visibility)
-                firstDots = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString()
             }
             SystemClock.sleep(600)
             scenario.onActivity { activity ->
-                assertEquals(firstDots, activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString())
+                assertEquals(View.GONE, activity.findViewById<View>(R.id.overlay_pdf_navigation_wait).visibility)
                 val view = findPdfView(activity)
                 val content = view.parent as ViewGroup
                 content.suppressLayout(true)
@@ -229,8 +219,9 @@ class PdfRotationInstrumentedTest {
             var parent: ViewGroup? = null
             scenario.onActivity { activity ->
                 val view = findPdfView(activity)
-                parent = view.parent as ViewGroup
-                parent?.suppressLayout(true)
+                val content = view.parent as ViewGroup
+                parent = content
+                content.suppressLayout(true)
                 view.requestLayout()
                 val fragment = activity.supportFragmentManager.fragments.first() as PdfEditorFragment
                 fragment.loadDocumentAtPage(uri, TARGET_PAGE / 2)
@@ -310,7 +301,6 @@ class PdfRotationInstrumentedTest {
         withPdfActivity(PdfEditorActivity::class.java, PdfEditorActivity.EXTRA_INPUT_URI, forResult = true) { scenario, uri ->
             awaitNavigation(scenario)
             try {
-                var firstDots = ""
                 scenario.onActivity { activity ->
                     activity.onApplyEditsSuccess(object : PdfWriteHandle {
                         override suspend fun writeTo(destination: ParcelFileDescriptor) {
@@ -329,19 +319,14 @@ class PdfRotationInstrumentedTest {
                         }
                     })
                     assertSaveBlocksBack(activity)
-                    firstDots = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString()
+                    assertWaitIndicatorShown(activity)
                 }
-                waitUntil {
-                    var animated = false
-                    scenario.onActivity { activity ->
-                        animated = activity.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString() != firstDots
-                    }
-                    writingStarted.isCompleted && animated
-                }
+                waitUntil { writingStarted.isCompleted }
                 scenario.moveToState(Lifecycle.State.CREATED)
                 scenario.moveToState(Lifecycle.State.RESUMED)
                 scenario.onActivity { activity ->
                     assertSaveBlocksBack(activity)
+                    assertWaitIndicatorShown(activity)
                     saveWaitPreview(activity, "saving_wait_preview.png")
                 }
                 releaseWrite.complete(Unit)
@@ -376,7 +361,7 @@ class PdfRotationInstrumentedTest {
 
     private fun assertSaveBlocksBack(activity: PdfEditorActivity) {
         assertWaitBlocksContent(activity)
-        assertEquals(activity.getString(R.string.pdf_edits_saving), activity.findViewById<TextView>(R.id.pdf_navigation_wait_caption).text)
+        assertEquals(activity.getString(R.string.pdf_edits_saving), activity.findViewById<TextView>(R.id.progress_bar_simple_text).text)
         assertFalse(findSaveButton(activity).isEnabled)
         activity.onBackPressedDispatcher.onBackPressed()
         val toolbar = activity.findViewById<MaterialToolbar>(R.id.toolbar)
@@ -445,8 +430,9 @@ class PdfRotationInstrumentedTest {
                     scenario.onActivity { viewer ->
                         if (holdViewerLayout) {
                             val view = findPdfView(viewer)
-                            viewerParent = view.parent as ViewGroup
-                            viewerParent?.suppressLayout(true)
+                            val content = view.parent as ViewGroup
+                            viewerParent = content
+                            content.suppressLayout(true)
                             view.requestLayout()
                         }
                         val buttons = ArrayList<View>()
@@ -476,17 +462,9 @@ class PdfRotationInstrumentedTest {
                     }
                     waitUntil { scenario.state == Lifecycle.State.RESUMED }
                     if (holdViewerLayout) {
-                        var firstDots = ""
                         scenario.onActivity { viewer ->
                             assertWaitBlocksContent(viewer)
-                            firstDots = viewer.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString()
-                        }
-                        waitUntil(timeoutMillis = 5_000) {
-                            var changed = false
-                            scenario.onActivity { viewer ->
-                                changed = viewer.findViewById<TextView>(R.id.pdf_navigation_wait_dots).text.toString() != firstDots
-                            }
-                            changed
+                            assertWaitIndicatorShown(viewer)
                         }
                     }
                 } finally {
@@ -541,6 +519,10 @@ class PdfRotationInstrumentedTest {
             assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, content.importantForAccessibility)
             assertEquals(ViewGroup.FOCUS_BLOCK_DESCENDANTS, content.descendantFocusability)
         }
+    }
+
+    private fun assertWaitIndicatorShown(activity: PdfActivity) {
+        assertTrue(activity.findViewById<LinearProgressIndicator>(R.id.progress_bar_indicator).isShown)
     }
 
     private fun findSaveButton(activity: PdfEditorActivity): View {
@@ -686,7 +668,7 @@ class PdfRotationInstrumentedTest {
     }
 
     private fun findPdfView(activity: PdfActivity): PdfView =
-        requireNotNull(findPdfView(activity.findViewById<View>(android.R.id.content)))
+        requireNotNull(findPdfView(activity.findViewById(android.R.id.content)))
 
     private fun findPdfView(view: View): PdfView? {
         if (view is PdfView) return view

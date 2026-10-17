@@ -1,5 +1,6 @@
 package hu.reelee81.pdflabelprinting
 
+import com.itextpdf.kernel.colors.ColorConstants
 import com.itextpdf.kernel.font.PdfFontFactory
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
@@ -15,6 +16,7 @@ import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.EventType
 import com.itextpdf.kernel.pdf.canvas.parser.PdfCanvasProcessor
 import com.itextpdf.kernel.pdf.canvas.parser.data.IEventData
+import com.itextpdf.kernel.pdf.canvas.parser.data.PathRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.data.TextRenderInfo
 import com.itextpdf.kernel.pdf.canvas.parser.listener.IEventListener
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
@@ -280,6 +282,77 @@ class PdfEditProjectionTest {
         assertFalse(textPositions(cleared, 1).containsKey("NEW EDIT"))
     }
 
+    @Test
+    fun reloadedEditedOutputDoesNotGetDeeperWhenSavedOrEditedAgain() {
+        var exported = buildPlp(projectEdit(makeSource(1), "EDIT 0", 1), flatten = true)
+        val depth = maxDepth(exported)
+
+        for (round in 1..5) {
+            val resaved = buildPlp(reload(exported), flatten = true)
+            assertEquals("resave in round $round", depth, maxDepth(resaved))
+
+            exported = buildPlp(projectEdit(reload(resaved), "EDIT $round", 1), flatten = true)
+            assertEquals("new edit in round $round", depth, maxDepth(exported))
+
+            val texts = textPositions(exported, 1)
+            assertTrue(texts.containsKey("SOURCE 1"))
+            for (previous in 0..round) assertTrue("EDIT $previous is missing", texts.containsKey("EDIT $previous"))
+
+            val cleared = temporary.newFile()
+            assertEquals(1, PdfEditProjection.clearLayers(exported, cleared, null, batchSize = 1) {})
+            val left = textPositions(cleared, 1)
+            assertFalse(left.containsKey("EDIT $round"))
+            for (previous in 0 until round) assertTrue("EDIT $previous was cleared", left.containsKey("EDIT $previous"))
+        }
+    }
+
+    @Test
+    fun reloadedFramedOutputDoesNotGetDeeperWhenSavedOrEditedAgain() {
+        var plain = buildPlp(makeSource(1), flatten = true, frame = true)
+        val plainDepth = maxDepth(plain)
+        var exported = buildPlp(projectEdit(makeSource(1), "EDIT 0", 1), flatten = true, frame = true)
+        val depth = maxDepth(exported)
+
+        for (round in 1..5) {
+            plain = buildPlp(reload(plain), flatten = true, frame = true)
+            assertEquals("frame only in round $round", plainDepth, maxDepth(plain))
+            assertEquals(round + 1, strokeCount(plain))
+
+            val resaved = buildPlp(reload(exported), flatten = true, frame = true)
+            assertEquals("resave in round $round", depth, maxDepth(resaved))
+
+            exported = buildPlp(projectEdit(reload(resaved), "EDIT $round", 1), flatten = true, frame = true)
+            assertEquals("new edit in round $round", depth, maxDepth(exported))
+
+            val texts = textPositions(exported, 1)
+            assertTrue(texts.containsKey("SOURCE 1"))
+            for (previous in 0..round) assertTrue("EDIT $previous is missing", texts.containsKey("EDIT $previous"))
+        }
+    }
+
+    private fun strokeCount(file: File): Int {
+        var count = 0
+        PdfDocument(PdfReader(file)).use { pdf ->
+            val listener = object : IEventListener {
+                override fun eventOccurred(data: IEventData?, type: EventType?) {
+                    if (data is PathRenderInfo && data.operation and PathRenderInfo.STROKE != 0) count++
+                }
+
+                override fun getSupportedEvents(): Set<EventType> = setOf(EventType.RENDER_PATH)
+            }
+            PdfCanvasProcessor(listener).processPageContent(pdf.getPage(1))
+        }
+        return count
+    }
+
+    private fun reload(file: File): File {
+        val reloaded = temporary.newFile()
+        PdfDocument(PdfReader(file)).use { src ->
+            PdfDocument(PdfWriter(reloaded)).use { out -> src.copyPagesTo(1, src.numberOfPages, out) }
+        }
+        return reloaded
+    }
+
     private fun privateData(dictionary: PdfDictionary): PdfDictionary? =
         dictionary.getAsDictionary(PdfName.PieceInfo)
             ?.getAsDictionary(PdfName("PdfLabelPrinting"))
@@ -289,7 +362,7 @@ class PdfEditProjectionTest {
 
     private fun base(page: PdfPage): PdfDictionary? = privateData(page.pdfObject)?.getAsDictionary(PdfName("Base"))
 
-    private fun buildPlp(source: File): File {
+    private fun buildPlp(source: File, flatten: Boolean = false, frame: Boolean = false): File {
         val file = temporary.newFile()
         val generation = PdfEditProjection.newGeneration()
         PdfDocument(PdfWriter(file)).use { out ->
@@ -298,8 +371,10 @@ class PdfEditProjectionTest {
                     val sourcePage = src.getPage(number)
                     val page = out.addNewPage(PageSize.A4)
                     val canvas = PdfCanvas(page)
-                    val form = sourcePage.copyAsFormXObject(out)
-                    form.bBox = PdfArray(PdfCopySupport.visibleBox(sourcePage))
+                    val box = PdfCopySupport.visibleBox(sourcePage)
+                    val form = (if (flatten) PdfCopySupport.flattenedFormXObject(sourcePage, out, box) else null)
+                        ?: sourcePage.copyAsFormXObject(out)
+                    form.bBox = PdfArray(box)
                     canvas.saveState()
                     PdfCopySupport.concatPlacementMatrix(
                         canvas, rotatedHalf[0], rotatedHalf[1], rotatedHalf[2],
@@ -308,6 +383,12 @@ class PdfEditProjectionTest {
                     PdfEditProjection.tagLayerSource(form, sourcePage, number - 1, generation)
                     canvas.addXObjectWithTransformationMatrix(form, 1f, 0f, 0f, 1f, 0f, 0f)
                     canvas.restoreState()
+                    if (frame) {
+                        canvas.setStrokeColor(ColorConstants.BLACK)
+                            .setLineWidth(1f)
+                            .rectangle(20.0, 20.0, 555.0, 802.0)
+                            .stroke()
+                    }
                     PdfEditProjection.markPlpPage(page, listOf(PdfEditProjection.Cell(number - 1, rotatedHalf)), generation)
                 }
             }

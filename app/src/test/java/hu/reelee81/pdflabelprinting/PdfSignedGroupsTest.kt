@@ -2,6 +2,7 @@ package hu.reelee81.pdflabelprinting
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PdfSignedGroupsTest {
@@ -27,7 +28,7 @@ class PdfSignedGroupsTest {
     @Test
     fun aShortLastGroupAndOneUpLayoutsAreHandled() {
         assertEquals(setOf(9), PdfSignedGroups.mergedIndices(listOf(8), 4, 10))
-        assertEquals(emptySet<Int>(), PdfSignedGroups.mergedIndices(listOf(0, 3), 1, 5))
+        assertTrue(PdfSignedGroups.mergedIndices(listOf(0, 3), 1, 5).isEmpty())
         assertArrayEquals(
             intArrayOf(0, 2, 0),
             PdfSignedGroups.afterMerge(intArrayOf(3, 2, 1), 3, listOf(0, 2), emptySet(), signedValue = 0, missingValue = 0)

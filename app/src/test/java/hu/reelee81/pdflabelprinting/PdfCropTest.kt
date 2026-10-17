@@ -4,6 +4,7 @@ import com.itextpdf.kernel.geom.Rectangle
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,7 +25,7 @@ class PdfCropTest {
     fun invalidOrTooSmallCropsAreRejectedAndValuesAreClamped() {
         assertNull(PdfCropRect.of(0.5f, 0.5f, 0.505f, 0.9f))
         assertNull(PdfCropRect.of(Float.NaN, 0f, 1f, 1f))
-        assertEquals(PdfCropRect(0f, 0f, 1f, 0.5f), PdfCropRect.of(-0.2f, -1f, 1.4f, 0.5f))
+        assertCrop(0f, 0f, 1f, 0.5f, PdfCropRect.of(-0.2f, -1f, 1.4f, 0.5f))
     }
 
     @Test
@@ -39,7 +40,9 @@ class PdfCropTest {
     fun encodedCropsDecodeToTheSameValuesAndBrokenEntriesAreSkipped() {
         val crops = mapOf(0 to crop, 17 to PdfCropRect(0f, 0f, 0.5f, 0.5f))
         assertEquals(crops, PdfCrops.decode(PdfCrops.encode(crops)))
-        assertEquals(mapOf(2 to crop), PdfCrops.decode("x:1,2,3,4;2:0.1,0.2,0.6,0.9;5:0,0;-1:0,0,1,1;9:0,0,1,1"))
+        val decoded = PdfCrops.decode("x:1,2,3,4;2:0.1,0.2,0.6,0.9;5:0,0;-1:0,0,1,1;9:0,0,1,1")
+        assertEquals(1, decoded.size)
+        assertCrop(0.1f, 0.2f, 0.6f, 0.9f, decoded[2])
         assertTrue(PdfCrops.decode("").isEmpty())
     }
 
@@ -74,7 +77,7 @@ class PdfCropTest {
             val shown = PdfCrops.toDisplay(stored, turns)
             assertArrayEquals(floatArrayOf(0.1f, 0.2f, 0.7f, 0.6f), shown, 0.0001f)
         }
-        assertEquals(PdfCropRect(0f, 0f, 0.5f, 1f), PdfCrops.fromDisplay(0f, 0.5f, 1f, 1f, 1))
+        assertCrop(0f, 0f, 0.5f, 1f, PdfCrops.fromDisplay(0f, 0.5f, 1f, 1f, 1))
     }
 
     @Test
@@ -89,5 +92,14 @@ class PdfCropTest {
         assertEquals(crops[8], result[5])
         assertEquals(crops[11], result[8])
         assertEquals(8, result.size)
+    }
+
+    private fun assertCrop(left: Float, bottom: Float, right: Float, top: Float, actual: PdfCropRect?) {
+        assertNotNull(actual)
+        assertArrayEquals(
+            floatArrayOf(left, bottom, right, top),
+            floatArrayOf(actual!!.left, actual.bottom, actual.right, actual.top),
+            0.0001f
+        )
     }
 }

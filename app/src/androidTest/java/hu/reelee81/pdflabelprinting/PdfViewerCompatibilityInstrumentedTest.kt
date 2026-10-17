@@ -37,7 +37,6 @@ class PdfViewerCompatibilityInstrumentedTest {
 
     @Test
     fun mainMenuOffersInternalReaderFromAndroid9() {
-        // MainActivity consumes and clears its launch intent, unlike ActivityScenario expects.
         val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
         try {
             context.startActivity(Intent(context, MainActivity::class.java)
@@ -149,7 +148,6 @@ class PdfViewerCompatibilityInstrumentedTest {
         if (view.width <= 0 || view.height <= 0) return false
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         try {
-            // Direct drawing needs the scroll translation normally supplied by the parent.
             val canvas = Canvas(bitmap)
             canvas.translate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
             view.draw(canvas)

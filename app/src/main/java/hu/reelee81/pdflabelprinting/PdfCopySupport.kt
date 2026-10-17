@@ -9,6 +9,7 @@ import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDictionary
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfName
+import com.itextpdf.kernel.pdf.PdfNumber
 import com.itextpdf.kernel.pdf.PdfObject
 import com.itextpdf.kernel.pdf.PdfOutputStream
 import com.itextpdf.kernel.pdf.PdfPage
@@ -18,21 +19,27 @@ import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
 import java.io.ByteArrayOutputStream
-import java.util.regex.Pattern
 import kotlin.math.max
 import kotlin.math.min
 
 internal object PdfCopySupport {
-    private val WRAPPER_TOKEN: Pattern = Pattern.compile(
-        "\\s*(?:q|Q|(?:[-+]?(?:\\d+\\.?\\d*|\\.\\d+)\\s+){6}cm|/([^\\s/<>\\[\\]()%{}]+)\\s*Do)"
+    private val RESOURCE_FREE_OPERATORS = setOf(
+        "q", "Q", "cm",
+        "m", "l", "c", "v", "y", "h", "re",
+        "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n", "W", "W*",
+        "g", "G", "rg", "RG", "k", "K",
+        "w", "J", "j", "M", "d", "i"
     )
+    private val STATE_OPERATORS = setOf("q", "Q", "cm")
+    private val PATH_OPERATORS = setOf("m", "l", "c", "v", "y", "h", "re")
+    private val PATH_ENDING_OPERATORS = setOf("S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n")
     private val REF = PdfName("Ref")
     private const val MAX_WRAPPER_DEPTH = 64
     private const val MAX_REFERENCE_DEPTH = 16
     private const val MAX_REFERENCE_FORMS = 256
     private const val MATRIX_SIZE = 6
 
-    private class Wrapper(val before: String, val name: PdfName, val after: String)
+    private class Wrapper(val before: String, val name: PdfName, val after: String, val paints: Boolean)
 
     fun flattenedFormXObject(page: PdfPage, destination: PdfDocument, bBox: Rectangle): PdfFormXObject? {
         val dictionary = page.pdfObject
@@ -45,6 +52,7 @@ internal object PdfCopySupport {
             pageContent.write('\n'.code)
         }
         var wrapper = parseWrapper(pageContent.toByteArray()) ?: return null
+        var paints = wrapper.paints
         var resources: PdfDictionary = page.resources.pdfObject
         val output = ByteArrayOutputStream()
         val closing = ArrayList<String>()
@@ -68,7 +76,8 @@ internal object PdfCopySupport {
                     ?.getAsName(PdfName.Subtype) == PdfName.Form
             }
             if (next == null) {
-                if (refersToChain(formResources, seen) || PdfEditProjection.containsEditLayer(formResources)) return null
+                if (paints && form.containsKey(PdfName.Group)) return null
+                if (usesPatterns(formResources) || refersToChain(formResources, seen)) return null
                 val unclosed = unclosedSaves(content, formResources) ?: return null
                 output.write(content)
                 repeat(unclosed) { output.writeLatin1("\nQ") }
@@ -83,37 +92,97 @@ internal object PdfCopySupport {
                 }
             }
             if (form.containsKey(PdfName.Group)) return null
+            paints = paints || next.paints
             wrapper = next
             resources = formResources
         }
         return null
     }
 
+    fun unwrapSingleFormPage(page: PdfPage): Boolean {
+        val dictionary = page.pdfObject
+        val resources = dictionary.getAsDictionary(PdfName.Resources) ?: return false
+        val xObjects = resources.getAsDictionary(PdfName.XObject) ?: return false
+        if (xObjects.size() != 1) return false
+        for (category in resources.keySet()) {
+            if (category == PdfName.XObject || category == PdfName.ProcSet) continue
+            if ((resources.getAsDictionary(category)?.size() ?: 1) != 0) return false
+        }
+
+        val pageContent = ByteArrayOutputStream()
+        for (index in 0 until page.contentStreamCount) {
+            pageContent.write(page.getContentStream(index).bytes)
+            pageContent.write('\n'.code)
+        }
+        val wrapper = parseWrapper(pageContent.toByteArray()) ?: return false
+        val form = xObjects.getAsStream(wrapper.name) ?: return false
+        if (!isPlainForm(form) || form.containsKey(PdfName.Group)) return false
+        val box = form.getAsArray(PdfName.BBox)?.takeIf { it.size() == 4 }?.toRectangle() ?: return false
+        val matrix = form.getAsArray(PdfName.Matrix)?.let { matrixValues(it) ?: return false }
+        val formResources = form.getAsDictionary(PdfName.Resources) ?: return false
+        if (usesPatterns(formResources)) return false
+        val content = form.bytes
+        val unclosed = unclosedSaves(content, formResources) ?: return false
+
+        val output = ByteArrayOutputStream()
+        output.writeLatin1(wrapper.before)
+        output.writeLatin1("\nq\n")
+        if (matrix != null) output.writeOperator(matrix, "cm")
+        output.writeOperator(doubleArrayOf(box.x.toDouble(), box.y.toDouble(), box.width.toDouble(), box.height.toDouble()), "re W n")
+        output.write(content)
+        repeat(unclosed) { output.writeLatin1("\nQ") }
+        output.writeLatin1("\nQ\n")
+        output.writeLatin1(wrapper.after)
+
+        dictionary.put(PdfName.Contents, PdfStream(output.toByteArray()).makeIndirect(page.document))
+        dictionary.put(PdfName.Resources, PdfDictionary(formResources))
+        dictionary.setModified()
+        return true
+    }
+
     private fun parseWrapper(bytes: ByteArray): Wrapper? {
-        val text = String(bytes, Charsets.ISO_8859_1)
-        val matcher = WRAPPER_TOKEN.matcher(text)
-        var position = 0
-        var name: String? = null
+        var name: PdfName? = null
         var start = 0
         var end = 0
-        while (position < text.length) {
-            matcher.region(position, text.length)
-            if (!matcher.lookingAt()) {
-                if (text.substring(position).isNotBlank()) return null
-                break
+        var paints = false
+        var pathPending = false
+        try {
+            PdfTokenizer(RandomAccessFileOrArray(RandomAccessSourceFactory().createSource(bytes))).use { tokenizer ->
+                val parser = PdfCanvasParser(tokenizer, PdfResources(PdfDictionary()))
+                val operands = ArrayList<PdfObject>()
+                var previousEnd = 0
+                while (parser.parse(operands).isNotEmpty()) {
+                    val operatorEnd = tokenizer.position.toInt()
+                    val operator = operands.last().toString()
+                    val arguments = operands.subList(0, operands.size - 1)
+                    if (operator in PATH_OPERATORS) pathPending = true
+                    if (operator in PATH_ENDING_OPERATORS) pathPending = false
+                    if (operator == "Do") {
+                        if (name != null || arguments.size != 1 || pathPending) return null
+                        name = arguments[0] as? PdfName ?: return null
+                        start = previousEnd
+                        end = operatorEnd
+                    } else if (operator !in RESOURCE_FREE_OPERATORS || !arguments.all(::isNumeric)) {
+                        return null
+                    } else if (operator !in STATE_OPERATORS) {
+                        paints = true
+                    }
+                    previousEnd = operatorEnd
+                }
             }
-            val found = matcher.group(1)
-            if (found != null) {
-                if (name != null) return null
-                name = found
-                start = matcher.start()
-                end = matcher.end()
-            }
-            position = matcher.end()
+        } catch (_: Exception) {
+            return null
         }
         val target = name ?: return null
-        return Wrapper(text.substring(0, start), PdfName(target), text.substring(end))
+        val text = String(bytes, Charsets.ISO_8859_1)
+        return Wrapper(text.substring(0, start), target, text.substring(end), paints)
     }
+
+    private fun usesPatterns(resources: PdfDictionary): Boolean =
+        (resources.getAsDictionary(PdfName.Pattern)?.size() ?: 0) > 0
+
+    private fun isNumeric(operand: PdfObject): Boolean =
+        operand is PdfNumber || (operand is PdfArray && (0 until operand.size()).all { operand.get(it) is PdfNumber })
 
     private fun refersToChain(resources: PdfDictionary, chain: Set<PdfStream>): Boolean {
         val references = chain.mapNotNullTo(HashSet()) { it.indirectReference }
