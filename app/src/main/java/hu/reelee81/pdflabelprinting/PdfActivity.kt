@@ -31,6 +31,8 @@ abstract class PdfActivity : AppCompatActivity() {
     private var waitStartedAt = 0L
     private var serviceMessage: String? = null
     private var focusBeforeNavigation: View? = null
+    private var finishDeferred = false
+    private val finishAfterDeferLimit = Runnable { finishDeferredNow() }
     private val blockedContent = mutableListOf<BlockedContentState>()
     private val ignoreBackWhileWaiting = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {}
@@ -87,6 +89,8 @@ abstract class PdfActivity : AppCompatActivity() {
 
     protected open fun cancelablePdfOperationCaption(): Int? = null
 
+    protected open fun pdfNavigationCaption(): Int = R.string.pdf_navigation_wait
+
     protected open fun cancelPdfOperation() {}
 
     protected open fun isPdfDocumentLoading(): Boolean = false
@@ -98,6 +102,28 @@ abstract class PdfActivity : AppCompatActivity() {
     protected open fun leavesOnPdfWaitCancel(): Boolean = false
 
     protected fun isPdfWaitActive(): Boolean = waitActive
+
+    protected open fun isPdfDocumentOpening(): Boolean = false
+
+    override fun finish() {
+        if (!isFinishing && !isDestroyed && isPdfDocumentOpening()) {
+            if (!finishDeferred) {
+                finishDeferred = true
+                window.decorView.postDelayed(finishAfterDeferLimit, FINISH_DEFER_LIMIT_MS)
+            }
+            return
+        }
+        finishDeferred = false
+        window.decorView.removeCallbacks(finishAfterDeferLimit)
+        super.finish()
+    }
+
+    private fun finishDeferredNow() {
+        if (!finishDeferred) return
+        finishDeferred = false
+        window.decorView.removeCallbacks(finishAfterDeferLimit)
+        super.finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -151,6 +177,10 @@ abstract class PdfActivity : AppCompatActivity() {
 
     fun onPdfOperationStateChanged() {
         if (isFinishing || isDestroyed) return
+        if (finishDeferred && !isPdfDocumentOpening()) {
+            finishDeferredNow()
+            return
+        }
         val navigating = isPdfNavigationInProgress()
         val saving = isPdfSavingInProgress()
         val active = navigating || saving
@@ -206,7 +236,7 @@ abstract class PdfActivity : AppCompatActivity() {
         }
 
         val caption = getString(
-            cancelablePdfOperationCaption() ?: if (saving) R.string.pdf_edits_saving else R.string.pdf_navigation_wait
+            cancelablePdfOperationCaption() ?: if (saving) R.string.pdf_edits_saving else pdfNavigationCaption()
         )
         overlay.findViewById<TextView>(R.id.progress_bar_cancel)?.let { button ->
             val label = getString(if (leavesOnPdfWaitCancel()) R.string.back_to_main_screen else R.string.cancel_text)
@@ -319,6 +349,7 @@ abstract class PdfActivity : AppCompatActivity() {
         blockedContent.clear()
         focusBeforeNavigation = null
         window.decorView.removeCallbacks(recreateWhenIdle)
+        window.decorView.removeCallbacks(finishAfterDeferLimit)
         super.onDestroy()
     }
 
@@ -327,6 +358,7 @@ abstract class PdfActivity : AppCompatActivity() {
     private companion object {
         const val STATE_PENDING_RECREATION = "pdf_pending_recreation"
         const val WAIT_REVEAL_MS = 300L
+        const val FINISH_DEFER_LIMIT_MS = 10_000L
         const val PROGRESS_TICK_MS = 500L
         const val PROGRESS_REVEAL_MS = 5_000L
         const val PROGRESS_IDLE_MS = 1_000L

@@ -7,7 +7,9 @@ import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDictionary
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfName
+import com.itextpdf.kernel.pdf.PdfPage
 import com.itextpdf.kernel.pdf.PdfReader
+import com.itextpdf.kernel.pdf.PdfStream
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.EventType
@@ -73,13 +75,13 @@ class PdfEditProjectionTest {
 
         PdfDocument(PdfReader(source)).use { pdf ->
             val first = pdf.getPage(1).pdfObject
-            val editForm = first.getAsStream(PdfName("PdfLabelEdit"))
+            val editForm = layerForm(pdf.getPage(1))
             assertNotNull(editForm)
-            val names = editForm.getAsDictionary(PdfName.Resources).getAsDictionary(PdfName.XObject).keySet()
+            val names = editForm!!.getAsDictionary(PdfName.Resources).getAsDictionary(PdfName.XObject).keySet()
             assertEquals(10, names.size)
             assertEquals(1, first.getAsDictionary(PdfName.Resources).getAsDictionary(PdfName.XObject).keySet().size)
             assertEquals(2, pdf.getPage(1).contentStreamCount)
-            assertFalse(pdf.getPage(2).pdfObject.containsKey(PdfName("PdfLabelEdit")))
+            assertNull(layerForm(pdf.getPage(2)))
         }
     }
 
@@ -103,10 +105,10 @@ class PdfEditProjectionTest {
         assertEquals(1, PdfEditProjection.project(source, cleared, projected, batchSize = 1) {})
         PdfDocument(PdfReader(projected)).use { pdf ->
             val first = pdf.getPage(1)
-            assertFalse(first.pdfObject.containsKey(PdfName("PdfLabelEdit")))
+            assertNull(layerForm(first))
             assertEquals(1, first.contentStreamCount)
             assertEquals(0, first.pdfObject.getAsDictionary(PdfName.Resources).getAsDictionary(PdfName.XObject).size())
-            assertTrue(pdf.getPage(2).pdfObject.containsKey(PdfName("PdfLabelEdit")))
+            assertNotNull(layerForm(pdf.getPage(2)))
         }
         val finalPlp = buildPlp(projected)
         assertFalse(textPositions(finalPlp, 1).containsKey("FIRST PAGE EDIT"))
@@ -133,9 +135,9 @@ class PdfEditProjectionTest {
         assertFalse(first.containsKey("OLD ONE"))
         assertFalse(textPositions(finalPlp, 2).containsKey("OLD TWO"))
         PdfDocument(PdfReader(projected)).use { pdf ->
-            val layer = pdf.getPage(1).pdfObject.getAsStream(PdfName("PdfLabelEdit"))
+            val layer = layerForm(pdf.getPage(1))!!
             assertEquals(1, layer.getAsDictionary(PdfName.Resources).getAsDictionary(PdfName.XObject).size())
-            assertFalse(pdf.getPage(2).pdfObject.containsKey(PdfName("PdfLabelEdit")))
+            assertNull(layerForm(pdf.getPage(2)))
         }
     }
 
@@ -163,14 +165,14 @@ class PdfEditProjectionTest {
         assertTrue(textPositions(cleared, 2).containsKey("SECOND PAGE EDIT"))
         PdfDocument(PdfReader(cleared)).use { pdf ->
             assertEquals(1, pdf.getPage(1).contentStreamCount)
-            assertTrue(pdf.getPage(1).pdfObject.containsKey(PdfName("PdfLabelEditBase")))
+            assertNotNull(base(pdf.getPage(1)))
         }
 
         val projected = temporary.newFile()
         assertEquals(1, PdfEditProjection.project(source, cleared, projected, batchSize = 1) {})
         PdfDocument(PdfReader(projected)).use { pdf ->
-            assertFalse(pdf.getPage(1).pdfObject.containsKey(PdfName("PdfLabelEdit")))
-            assertTrue(pdf.getPage(2).pdfObject.containsKey(PdfName("PdfLabelEdit")))
+            assertNull(layerForm(pdf.getPage(1)))
+            assertNotNull(layerForm(pdf.getPage(2)))
         }
     }
 
@@ -220,7 +222,7 @@ class PdfEditProjectionTest {
 
         val unmarked = temporary.newFile("unmarked.pdf")
         PdfDocument(PdfReader(edit(plp, "EDIT", 150f, 200f)), PdfWriter(unmarked)).use { pdf ->
-            pdf.getPage(1).pdfObject.remove(PdfName("PdfLabelEditBase"))
+            privateData(pdf.getPage(1).pdfObject)!!.remove(PdfName("Base"))
         }
         assertNotProjectable(source, unmarked)
     }
@@ -229,8 +231,7 @@ class PdfEditProjectionTest {
     fun recordedCellsKeepTheExactPlacement() {
         val plp = buildPlp(makeSource(1))
         PdfDocument(PdfReader(plp)).use { pdf ->
-            val base = pdf.getPage(1).pdfObject.getAsDictionary(PdfName("PdfLabelEditBase"))
-            val cells = base.getAsArray(PdfName("Cells"))
+            val cells = base(pdf.getPage(1))!!.getAsArray(PdfName("Cells"))
             assertEquals(0, cells.getAsNumber(0).intValue())
             assertArrayEquals(rotatedHalf, DoubleArray(6) { cells.getAsNumber(it + 1).doubleValue() }, 1e-9)
         }
@@ -256,8 +257,41 @@ class PdfEditProjectionTest {
         return file
     }
 
+    @Test
+    fun editsInsideAnOutputLoadedAsANewSourceAreNotEditableLayers() {
+        val edited = projectEdit(makeSource(2), "SAVED EDIT", 1)
+        val exported = buildPlp(edited)
+        assertTrue(hasLayers(exported, null))
+
+        val reloaded = temporary.newFile()
+        PdfDocument(PdfReader(exported)).use { src ->
+            PdfDocument(PdfWriter(reloaded)).use { out -> src.copyPagesTo(1, src.numberOfPages, out) }
+        }
+        val plp = buildPlp(reloaded)
+        assertTrue(textPositions(plp, 1).containsKey("SAVED EDIT"))
+        assertFalse(hasLayers(plp, null))
+        assertEquals(0, PdfEditProjection.clearLayers(plp, temporary.newFile(), null, batchSize = 1) {})
+        assertEquals(0, PdfEditProjection.project(reloaded, plp, temporary.newFile(), batchSize = 1) {})
+
+        val newEdit = projectEdit(reloaded, "NEW EDIT", 1)
+        val cleared = temporary.newFile()
+        assertEquals(1, PdfEditProjection.clearLayers(buildPlp(newEdit), cleared, null, batchSize = 1) {})
+        assertTrue(textPositions(cleared, 1).containsKey("SAVED EDIT"))
+        assertFalse(textPositions(cleared, 1).containsKey("NEW EDIT"))
+    }
+
+    private fun privateData(dictionary: PdfDictionary): PdfDictionary? =
+        dictionary.getAsDictionary(PdfName.PieceInfo)
+            ?.getAsDictionary(PdfName("PdfLabelPrinting"))
+            ?.getAsDictionary(PdfName.Private)
+
+    private fun layerForm(page: PdfPage): PdfStream? = privateData(page.pdfObject)?.getAsStream(PdfName("LayerForm"))
+
+    private fun base(page: PdfPage): PdfDictionary? = privateData(page.pdfObject)?.getAsDictionary(PdfName("Base"))
+
     private fun buildPlp(source: File): File {
         val file = temporary.newFile()
+        val generation = PdfEditProjection.newGeneration()
         PdfDocument(PdfWriter(file)).use { out ->
             PdfDocument(PdfReader(source)).use { src ->
                 for (number in 1..src.numberOfPages) {
@@ -271,10 +305,10 @@ class PdfEditProjectionTest {
                         canvas, rotatedHalf[0], rotatedHalf[1], rotatedHalf[2],
                         rotatedHalf[3], rotatedHalf[4], rotatedHalf[5]
                     )
-                    PdfEditProjection.tagLayerSource(form, number - 1)
+                    PdfEditProjection.tagLayerSource(form, sourcePage, number - 1, generation)
                     canvas.addXObjectWithTransformationMatrix(form, 1f, 0f, 0f, 1f, 0f, 0f)
                     canvas.restoreState()
-                    PdfEditProjection.markPlpPage(page, listOf(PdfEditProjection.Cell(number - 1, rotatedHalf)))
+                    PdfEditProjection.markPlpPage(page, listOf(PdfEditProjection.Cell(number - 1, rotatedHalf)), generation)
                 }
             }
         }

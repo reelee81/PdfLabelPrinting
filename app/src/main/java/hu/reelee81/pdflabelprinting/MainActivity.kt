@@ -344,6 +344,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var deferOrientationUnlockUntilThumbnailsReady: Boolean = false
     @Volatile private var deferredOrientationUnlockRequested: Boolean = false
     @Volatile private var reloadThumbnailsGeneration: Long = 0L
+    @Volatile private var lastNamedExport: File? = null
     @Volatile private var progressTotal = 0L
     @Volatile private var progressIdleSince = 0L
     @Volatile private var progressGeneration = 0L
@@ -393,6 +394,7 @@ class MainActivity : AppCompatActivity() {
     private val activeJobs = CopyOnWriteArrayList<Job>()
     private val pendingIncomingIntents = ArrayDeque<Intent>()
     private val pendingIncomingIntentRetry = Runnable { processPendingIncomingIntents() }
+    private val workspaceFilesCheck = Runnable { checkWorkspaceFiles() }
     private val plpSizedDialogs: MutableSet<AlertDialog> = newSetFromMap(WeakHashMap())
 
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -1158,6 +1160,11 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
+                    if (binding.overlayDialogAbout.isVisible) {
+                        binding.overlayDialogAbout.performClick()
+                        return
+                    }
+
                     if (binding.overlayDialogPositionOnPage.isVisible) {
                         binding.overlayDialogPositionOnPage.performClick()
                         return
@@ -1263,6 +1270,7 @@ class MainActivity : AppCompatActivity() {
             binding.overlayDialogSignatureChooserPanel,
             binding.overlayDialogTimestampPanel,
             binding.overlayDialogBatteryOptimizationPanel,
+            binding.overlayDialogAboutPanel,
             binding.overlayDialogPositionOnPagePanel,
             binding.overlayDialogPdfCropPanel,
             binding.overlayDialogMaxCoordinatesPanel,
@@ -1513,6 +1521,26 @@ class MainActivity : AppCompatActivity() {
             binding.overlayProgressDialogUpdateUi.isVisible ||
             binding.overlayDialogPassword.isVisible ||
             activeJobs.any { it.isActive }
+
+    private fun checkWorkspaceFiles() {
+        binding.root.removeCallbacks(workspaceFilesCheck)
+        if (isFinishing || isDestroyed || viewModel.pageItems.isEmpty()) return
+        if (isBusyForIncomingIntent() || isPlpRebuilding || isLoadingSettingsProfile) {
+            binding.root.postDelayed(workspaceFilesCheck, PENDING_INTENT_RETRY_MS)
+            return
+        }
+        if (sourceTempFile().exists() && plpTempFile().exists()) return
+
+        clearCacheDir()
+        sourceRotation = IntArray(0)
+        sourcePosition = IntArray(0)
+        sourceCrop = emptyMap()
+        lastBuiltNupConfig = null
+        resetThumbDocKey("workspaceFilesCleared")
+        clearThumbnails()
+        updateButtonsState()
+        Toast.makeText(this, getString(R.string.workspace_files_cleared), Toast.LENGTH_LONG).show()
+    }
 
     private fun processPendingIncomingIntents() {
         binding.root.removeCallbacks(pendingIncomingIntentRetry)
@@ -2397,6 +2425,12 @@ class MainActivity : AppCompatActivity() {
                         } else convertView
 
                         val holder = row.tag as RowViews
+
+                        holder.container.background = if (position == 1 || position == 3) {
+                            AppCompatResources.getDrawable(parent.context, R.drawable.signature_group_divider)
+                        } else {
+                            null
+                        }
 
                         holder.text.text = when {
                             isDpiRow && position == 0 -> getString(R.string.dpi_144)
@@ -3302,6 +3336,7 @@ class MainActivity : AppCompatActivity() {
             if (::binding.isInitialized) {
                 binding.root.removeCallbacks(progressTicker)
                 binding.root.removeCallbacks(pendingIncomingIntentRetry)
+                binding.root.removeCallbacks(workspaceFilesCheck)
                 binding.overlayProgressDialog.visibility = View.GONE
                 binding.overlayProgressDialogUpdateUi.visibility = View.GONE
             }
@@ -6764,10 +6799,21 @@ class MainActivity : AppCompatActivity() {
             FileInputStream(plp).use { inp ->
                 FileOutputStream(out).use { outP -> inp.copyTo(outP) }
             }
+            lastNamedExport = out
             out
         } catch (_: Exception) {
             plp
         }
+    }
+
+    private fun ownCacheFileFor(uri: Uri): File? {
+        if (uri.scheme != "content" || uri.authority != "$packageName.provider") return null
+        val segments = uri.pathSegments
+        if (segments.size != 2 || segments[0] != "cache") return null
+        val name = segments[1]
+        if (name.isEmpty() || name.contains('/') || name == "." || name == "..") return null
+        val file = File(cacheDir, name)
+        return file.takeIf { it.isFile && it.parentFile?.canonicalPath == cacheDir.canonicalPath }
     }
 
     private fun cleanupOldExports(keepRecent: Int = KEEP_RECENT_EXPORTS) {
@@ -6997,12 +7043,20 @@ class MainActivity : AppCompatActivity() {
                 if (work.exists()) work.delete()
                 if (projectedSource.exists()) projectedSource.delete()
 
-                contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(work).use { output ->
-                        input.copyTo(output)
-                        output.flush()
-                    }
-                } ?: throw IOException(getString(R.string.input_stream_is_null))
+                val editedFile = ownCacheFileFor(uri)
+                lastNamedExport?.let { named ->
+                    if (named.canonicalPath != editedFile?.canonicalPath) runCatching { named.delete() }
+                }
+                lastNamedExport = null
+
+                if (editedFile == null || !editedFile.renameTo(work)) {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(work).use { output ->
+                            input.copyTo(output)
+                            output.flush()
+                        }
+                    } ?: throw IOException(getString(R.string.input_stream_is_null))
+                }
 
                 val editedPages = PdfDocument(rdr(work.absolutePath)).use { it.numberOfPages }
                 val sourcePages = sourceTempPageCount()
@@ -7597,6 +7651,7 @@ class MainActivity : AppCompatActivity() {
         try {
 
             val cfg = currentNupConfigFromInputs()
+            val editGeneration = PdfEditProjection.newGeneration()
             val rows = cfg.rows
             val cols = cfg.cols
             val marginMm = cfg.marginMm
@@ -7772,9 +7827,10 @@ class MainActivity : AppCompatActivity() {
                                     }
                             }
 
-                            val fx  = sp.copyAsFormXObject(pdf)
+                            val fx  = runCatching { PdfCopySupport.flattenedFormXObject(sp, pdf, sz) }.getOrNull()
+                                ?: sp.copyAsFormXObject(pdf)
                             fx.bBox = PdfArray(sz)
-                            runCatching { PdfEditProjection.tagLayerSource(fx, globalIdx) }
+                            runCatching { PdfEditProjection.tagLayerSource(fx, sp, globalIdx, editGeneration) }
                             canvas.saveState()
 
                             val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
@@ -7860,7 +7916,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             if (idxLocal % per == per - 1 || globalIdx == srcEnd) {
-                                runCatching { PdfEditProjection.markPlpPage(currentPage, editCells) }
+                                runCatching { PdfEditProjection.markPlpPage(currentPage, editCells, editGeneration) }
                                 editCells.clear()
                                 runCatching { currentPage.flush() }
                             }
@@ -8828,6 +8884,9 @@ class MainActivity : AppCompatActivity() {
                 cleanupCacheExceptTemps()
             }
         }
+
+        binding.root.removeCallbacks(workspaceFilesCheck)
+        binding.root.post(workspaceFilesCheck)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -8882,7 +8941,62 @@ class MainActivity : AppCompatActivity() {
                 true
             }
 
+            R.id.action_about -> {
+                showAboutDialog()
+                true
+            }
+
             else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    private fun showAboutDialog() {
+        val overlay = binding.overlayDialogAbout
+        val panel = binding.overlayDialogAboutPanel
+
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_about, panel, false)
+        panel.addView(dialogView)
+
+        overlay.visibility = View.VISIBLE
+
+        overlay.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+        }
+        panel.setOnClickListener {
+        }
+
+        dialogView.findViewById<MaterialTextView>(R.id.about_title).text =
+            getString(R.string.about_title, getString(R.string.app_name), BuildConfig.VERSION_NAME)
+
+        listOf(
+            R.id.about_readme_link to R.string.about_readme_url,
+            R.id.about_privacy_link to R.string.about_privacy_url,
+            R.id.about_license_link to R.string.about_license_url,
+            R.id.about_third_party_link to R.string.about_third_party_url,
+            R.id.about_source_link to R.string.about_source_url
+        ).forEach { (viewId, urlId) ->
+            dialogView.findViewById<MaterialTextView>(viewId).setOnClickListener {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, getString(urlId).toUri()))
+                } catch (_: Exception) {
+                    Toast.makeText(this, getString(R.string.no_app_can_open_link), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        dialogView.findViewById<MaterialTextView>(R.id.about_contact_link).setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_SENDTO, ("mailto:" + getString(R.string.about_contact_email)).toUri()))
+            } catch (_: Exception) {
+                Toast.makeText(this, getString(R.string.no_email_app), Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        dialogView.findViewById<Button>(R.id.about_btn_ok)?.setOnClickListener {
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
         }
     }
 

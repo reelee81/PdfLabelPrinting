@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.DeadObjectException
 import android.os.ParcelFileDescriptor
 import android.os.ext.SdkExtensions
 import android.view.Gravity
@@ -74,11 +75,13 @@ class PdfEditorActivity : PdfActivity() {
     private var documentLoaded = false
     private var eraseJob: Job? = null
     private var eraseOverlayShown = false
-    private var erasing = false
+    private var erasingAll = false
+    private var searchingEdits = false
     private var erasedFile: File? = null
     private var erasedFileDelivered = false
     private var saveJob: Job? = null
     private var appliedFile: File? = null
+    private var pendingReload: Pair<Uri, Int>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -145,6 +148,14 @@ class PdfEditorActivity : PdfActivity() {
         onPdfOperationStateChanged()
     }
 
+    override fun onResume() {
+        super.onResume()
+        pendingReload?.let { (uri, pageIndex) ->
+            pendingReload = null
+            reloadEditorDocument(uri, pageIndex)
+        }
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(
             STATE_DISCARD_CONFIRMATION_VISIBLE,
@@ -184,10 +195,17 @@ class PdfEditorActivity : PdfActivity() {
     override fun isPdfWaitOverlayDeferred(): Boolean = eraseJob != null && !eraseOverlayShown
 
     override fun cancelablePdfOperationCaption(): Int? = when {
-        eraseJob != null -> if (erasing) R.string.pdf_edits_erasing else R.string.pdf_navigation_wait
+        eraseJob != null -> when {
+            searchingEdits -> R.string.pdf_wait_searching_edits
+            erasingAll -> R.string.pdf_wait_erasing_all
+            else -> R.string.pdf_wait_erasing_visible
+        }
         saveJob?.isCancelled == false -> R.string.pdf_edits_saving
         else -> null
     }
+
+    override fun pdfNavigationCaption(): Int =
+        if (isPdfDocumentLoading()) R.string.pdf_wait_editing_pages else R.string.pdf_wait_refreshing_pages
 
     override fun cancelPdfOperation() {
         eraseJob?.cancel()
@@ -201,6 +219,9 @@ class PdfEditorActivity : PdfActivity() {
     override fun onPdfLoadCancelled() {
         finishOrConfirmDiscard()
     }
+
+    override fun isPdfDocumentOpening(): Boolean =
+        supportsPdfEditing() && ::fragment.isInitialized && fragment.isAwaitingDocument
 
     override fun onPdfNavigationStateChanged(inProgress: Boolean) {
         if (!supportsPdfEditing() || !::fragment.isInitialized) return
@@ -305,7 +326,8 @@ class PdfEditorActivity : PdfActivity() {
         }
 
         eraseOverlayShown = false
-        erasing = false
+        erasingAll = all
+        searchingEdits = confirmFirst
         val job = lifecycleScope.launch(start = CoroutineStart.LAZY) {
             val output = File(cacheDir, "edited_${System.currentTimeMillis()}.pdf")
             var keepOutput = false
@@ -325,7 +347,6 @@ class PdfEditorActivity : PdfActivity() {
                     } else {
                         withContext(Dispatchers.Main) {
                             reveal.cancel()
-                            erasing = true
                             eraseOverlayShown = true
                             onPdfOperationStateChanged()
                         }
@@ -343,7 +364,7 @@ class PdfEditorActivity : PdfActivity() {
                     appliedFile?.delete()
                     appliedFile = null
                     documentLoaded = false
-                    fragment.loadDocumentAtPage(uriFor(output), pageIndex)
+                    reloadEditorDocument(uriFor(output), pageIndex)
                     ownInput?.delete()
                 }
             } catch (e: CancellationException) {
@@ -359,13 +380,26 @@ class PdfEditorActivity : PdfActivity() {
                 if (!keepOutput) output.delete()
                 eraseJob = null
                 eraseOverlayShown = false
-                erasing = false
                 onPdfOperationStateChanged()
             }
         }
         eraseJob = job
         onPdfOperationStateChanged()
         job.start()
+    }
+
+    private fun reloadEditorDocument(uri: Uri, pageIndex: Int) {
+        if (!supportsPdfEditing()) return
+        if (supportFragmentManager.isStateSaved) {
+            pendingReload = uri to pageIndex
+            return
+        }
+        val replacement = PdfEditorFragment()
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.pdfFragContainer, replacement, FRAG_TAG)
+            .commitNow()
+        fragment = replacement
+        replacement.loadDocumentAtPage(uri, pageIndex, refresh = true)
     }
 
     private fun showEraseOverlay() {
@@ -498,7 +532,7 @@ class PdfEditorActivity : PdfActivity() {
                 throw e
             } catch (e: Exception) {
                 outFile.delete()
-                Toast.makeText(this@PdfEditorActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
+                Toast.makeText(this@PdfEditorActivity, saveFailedMessage(e), Toast.LENGTH_LONG).show()
             } finally {
                 saveJob = null
                 saving = false
@@ -513,9 +547,16 @@ class PdfEditorActivity : PdfActivity() {
     fun onApplyEditsFailed(error: Throwable) {
         saving = false
         saveButton?.isEnabled = true
-        Toast.makeText(this, getString(R.string.pdf_edits_save_failed, error.message), Toast.LENGTH_LONG).show()
+        Toast.makeText(this, saveFailedMessage(error), Toast.LENGTH_LONG).show()
         onPdfOperationStateChanged()
     }
+
+    private fun saveFailedMessage(error: Throwable): String =
+        if (generateSequence(error) { it.cause }.any { it is DeadObjectException }) {
+            getString(R.string.pdf_edits_save_engine_restarted)
+        } else {
+            getString(R.string.pdf_edits_save_failed, error.message)
+        }
 
     private fun CoroutineScope.flattenAnnotationsInto(file: File, flatFile: File) {
         ITextPdfDocument(
@@ -617,9 +658,6 @@ class PdfEditorActivity : PdfActivity() {
             setResult(RESULT_CANCELED, resultData)
         }
 
-        if (supportsPdfEditing() && ::fragment.isInitialized && fragment.isEditModeEnabled) {
-            fragment.isEditModeEnabled = false
-        }
         finish()
     }
 

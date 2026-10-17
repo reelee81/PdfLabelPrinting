@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <string name="app_name">Pdf Címkenyomtatás</string>
+    <string name="app_name">PDF Címkenyomtatás</string>
     <string name="normal_pages">NORMÁL</string>
     <string name="label_pages">CÍMKE</string>
     <string name="select_signature">ALÁÍRÁS</string>
@@ -70,7 +70,15 @@
     <string name="in_progress_page_layout">Oldalelrendezés\u2026</string>
     <string name="in_progress_ui">Felület frissítése\u2026</string>
     <string name="pdf_navigation_wait">Kérlek várj</string>
-    <string name="pdf_edits_saving">Mentés folyamatban</string>
+    <string name="pdf_edits_saving">Szerkesztés(ek) mentése…</string>
+    <string name="pdf_wait_reading_pages">Oldal(ak) olvasása…</string>
+    <string name="pdf_wait_editing_pages">Oldal(ak) szerkesztése…</string>
+    <string name="pdf_wait_reading_edited_pages">Szerkesztett oldal(ak) olvasása…</string>
+    <string name="pdf_wait_reading_unedited_pages">Nem szerkesztett oldalak olvasása…</string>
+    <string name="pdf_wait_erasing_visible">Látható szerkesztés(ek) törlése…</string>
+    <string name="pdf_wait_erasing_all">Összes szerkesztés törlése…</string>
+    <string name="pdf_wait_searching_edits">Szerkesztések keresése…</string>
+    <string name="pdf_wait_refreshing_pages">Oldalak frissítése…</string>
     <string name="no_app_can_open_pdf">Nincs olyan alkalmazás, ami meg tudja nyitni a PDF-et</string>
     <string name="no_app_can_share_pdf">Nincs olyan alkalmazás, ami meg tudja osztani a PDF-et</string>
     <string name="print_service_not_available">A nyomtatási szolgáltatás nem érhető el</string>
@@ -115,6 +123,7 @@
     <string name="large_image">Max. 8411 x 8411 px</string>
     <string name="image_decode_failed">Kép dekódolása sikertelen</string>
     <string name="pdf_saved_successfully">PDF sikeresen mentve.</string>
+    <string name="workspace_files_cleared">A munkafájlok törlődtek, a lapok listája kiürült.</string>
     <string name="enter_value_batch_1_100">Adj meg egy értéket az 1 (stabil) és 100 (gyors) oldal/köteg között</string>
     <string name="save_settings_to_storage">Beállítások mentése</string>
     <string name="load_settings_from_storage">Beállítások betöltése</string>
@@ -130,7 +139,7 @@
     <string name="failed_to_replace_original_pdf_with_encrypted_version">Az eredeti PDF titkosított verzióra cserélése sikertelen</string>
     <string name="failed_to_rename_encrypted_pdf">A titkosított PDF átnevezése sikertelen</string>
     <string name="battery_optimization">Akkumulátor optimalizálás</string>
-    <string name="battery_optimization_text">A hosszú PDF műveletek (1000+ oldal) miatt érdemes kikapcsolni az akku-optimalizálást az alkalmazásnál, különben a rendszer megállíthatja a feldolgozást, ha háttérbe teszed az appot vagy lezárod a kijelzőt. Különböző gyártóknál más-másféleképpen lehet ezt a beállítást elérni, de általában a Beállítások → Alkalmazások → Alkalmazások kezelése → Pdf Címkenyomtatás → Itt kell keresni az "Energiafogyasztás" vagy a "Akkumulátor" beállítási lehetőségeket, amelyeken belül ki/be kapcsolható. Ennek ellenére is előfordulhat, hogy a folyamat szüneteltetett állapotba kerül, mert egyes gyártók túl agresszívan kezelik az akkumulátor védelmet például lezárt kijelzőnél. Ezért ha biztosra akarsz menni, hogy a hosszú műveletek végigfussanak, maradj az app felületén, mert ilyenkor ébren tartja a kijelzőt a feldolgozási folyamat befejezéséig.</string>
+    <string name="battery_optimization_text">A hosszú PDF műveletek (1000+ oldal) miatt érdemes kikapcsolni az akku-optimalizálást az alkalmazásnál, különben a rendszer megállíthatja a feldolgozást, ha háttérbe teszed az appot vagy lezárod a kijelzőt. Különböző gyártóknál más-másféleképpen lehet ezt a beállítást elérni, de általában a Beállítások → Alkalmazások → Alkalmazások kezelése → PDF Címkenyomtatás → Itt kell keresni az "Energiafogyasztás" vagy a "Akkumulátor" beállítási lehetőségeket, amelyeken belül ki/be kapcsolható. Ennek ellenére is előfordulhat, hogy a folyamat szüneteltetett állapotba kerül, mert egyes gyártók túl agresszívan kezelik az akkumulátor védelmet például lezárt kijelzőnél. Ezért ha biztosra akarsz menni, hogy a hosszú műveletek végigfussanak, maradj az app felületén, mert ilyenkor ébren tartja a kijelzőt a feldolgozási folyamat befejezéséig.</string>
     <string name="position_on_page">Pozicionálás az oldal(ak)on</string>
     <string name="crop_title">Szabad vágás</string>
     <string name="crop_all_pages">Alkalmazás minden oldalon</string>
@@ -140,6 +149,7 @@
     <string name="save_pdf_edits">MENTÉS</string>
     <string name="pdf_editor_requires_s_ext_18">A PDF-szerkesztőhöz Android 12 (S) Extension 18 vagy újabb szükséges.</string>
     <string name="pdf_edits_save_failed">A PDF-módosítások mentése sikertelen: %1$s</string>
+    <string name="pdf_edits_save_engine_restarted">A PDF-motor újraindult, ezért a rajzok nem menthetők. Lépj ki a szerkesztőből, és nyisd meg újra.</string>
     <string name="pdf_edits_save_cancelled">A mentés megszakítva. A rajzok a lapon maradtak, de egyenként már nem vonhatók vissza. A szerkesztőből kilépve elvetheted őket.</string>
     <string name="no_pdf_edits_to_save">Nincs menthető PDF-módosítás</string>
     <string name="discard_pdf_edits">Eldobod a PDF-módosításokat?</string>
@@ -150,4 +160,13 @@
     <string name="erase_all_pdf_edits_confirm">Törlöd a mentett szerkesztéseket minden lapról?</string>
     <string name="pdf_edits_erasing">Szerkesztések törlése</string>
     <string name="pdf_edits_erase_failed">A szerkesztések törlése sikertelen: %1$s</string>
+    <string name="about_app">Alkalmazás névjegye</string>
+    <string name="about_readme">Leírás:</string>
+    <string name="about_privacy">Adatvédelem:</string>
+    <string name="about_license">Licenc:</string>
+    <string name="about_third_party">Harmadik féltől származó licencek:</string>
+    <string name="about_source">Az AGPL előírása szerint az app forráskódja:</string>
+    <string name="about_contact">Kapcsolat:</string>
+    <string name="no_app_can_open_link">Nincs olyan alkalmazás, ami meg tudja nyitni a linket</string>
+    <string name="no_email_app">Nincs e-mail-küldő alkalmazás</string>
 </resources>

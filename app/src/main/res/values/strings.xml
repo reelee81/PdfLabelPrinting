@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <string name="app_name">Pdf Label Printing</string>
+    <string name="app_name">PDF Label Printing</string>
     <string name="normal_pages">NORMAL</string>
     <string name="label_pages">LABEL</string>
     <string name="select_signature">SIGNATURE</string>
@@ -70,7 +70,15 @@
     <string name="in_progress_page_layout">Page layout\u2026</string>
     <string name="in_progress_ui">UI update\u2026</string>
     <string name="pdf_navigation_wait">Please wait</string>
-    <string name="pdf_edits_saving">Saving in progress</string>
+    <string name="pdf_edits_saving">Saving edit(s)…</string>
+    <string name="pdf_wait_reading_pages">Reading page(s)…</string>
+    <string name="pdf_wait_editing_pages">Editing page(s)…</string>
+    <string name="pdf_wait_reading_edited_pages">Reading edited page(s)…</string>
+    <string name="pdf_wait_reading_unedited_pages">Reading unedited pages…</string>
+    <string name="pdf_wait_erasing_visible">Removing visible edit(s)…</string>
+    <string name="pdf_wait_erasing_all">Removing all edits…</string>
+    <string name="pdf_wait_searching_edits">Looking for edits…</string>
+    <string name="pdf_wait_refreshing_pages">Refreshing pages…</string>
     <string name="progress_percent" translatable="false">%1$d%%</string>
     <string name="no_app_can_open_pdf">No app can open PDF</string>
     <string name="no_app_can_share_pdf">No app can share PDF</string>
@@ -116,6 +124,7 @@
     <string name="large_image">Max 8411 x 8411 px</string>
     <string name="image_decode_failed">Image decode failed</string>
     <string name="pdf_saved_successfully">PDF saved successfully.</string>
+    <string name="workspace_files_cleared">The working files were deleted, the page list has been cleared.</string>
     <string name="enter_value_batch_1_100">Enter a value between page/batch 1 (stable) and 100 (fast)</string>
     <string name="save_settings_to_storage">Save settings</string>
     <string name="load_settings_from_storage">Load settings</string>
@@ -131,7 +140,7 @@
     <string name="failed_to_replace_original_pdf_with_encrypted_version">Failed to replace original PDF with encrypted version</string>
     <string name="failed_to_rename_encrypted_pdf">Failed to rename encrypted PDF</string>
     <string name="battery_optimization">Battery optimization</string>
-    <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app; otherwise, the system may stop processing when you put the app in the background or lock the screen. Different manufacturers place this setting in different locations, but in general you can find it under Settings → Apps → Manage apps → Pdf Label Printing, then look for “Power usage” or “Battery” options where you can turn it on or off. Even then, it may still happen that the process is paused on some devices because certain manufacturers are very aggressive with battery saving (for example when the screen is locked). Therefore, if you want to be absolutely sure that long operations finish, stay on the app screen, because in that case it keeps the display awake until the processing finishes.</string>
+    <string name="battery_optimization_text">Because of long-running PDF operations (1000+ pages), we recommend disabling battery optimization for this app; otherwise, the system may stop processing when you put the app in the background or lock the screen. Different manufacturers place this setting in different locations, but in general you can find it under Settings → Apps → Manage apps → PDF Label Printing, then look for “Power usage” or “Battery” options where you can turn it on or off. Even then, it may still happen that the process is paused on some devices because certain manufacturers are very aggressive with battery saving (for example when the screen is locked). Therefore, if you want to be absolutely sure that long operations finish, stay on the app screen, because in that case it keeps the display awake until the processing finishes.</string>
     <string name="position_on_page">Position on page(s)</string>
     <string name="crop_title">Free crop</string>
     <string name="crop_all_pages">Apply to all pages</string>
@@ -141,6 +150,7 @@
     <string name="save_pdf_edits">SAVE</string>
     <string name="pdf_editor_requires_s_ext_18">The PDF editor requires Android 12 (S) Extension 18 or higher.</string>
     <string name="pdf_edits_save_failed">Saving PDF edits failed: %1$s</string>
+    <string name="pdf_edits_save_engine_restarted">The PDF engine restarted, so the drawings can\'t be saved. Leave the editor and open it again.</string>
     <string name="pdf_edits_save_cancelled">Saving cancelled. The drawings stay on the page, but they can no longer be undone one by one. You can discard them when leaving the editor.</string>
     <string name="no_pdf_edits_to_save">No PDF edits to save</string>
     <string name="discard_pdf_edits">Discard PDF edits?</string>
@@ -151,4 +161,21 @@
     <string name="erase_all_pdf_edits_confirm">Remove saved edits from all pages?</string>
     <string name="pdf_edits_erasing">Removing edits</string>
     <string name="pdf_edits_erase_failed">Removing edits failed: %1$s</string>
+    <string name="about_app">About the app</string>
+    <string name="about_title" translatable="false">%1$s %2$s</string>
+    <string name="about_author" translatable="false">by reelee81</string>
+    <string name="about_readme">Readme:</string>
+    <string name="about_privacy">Privacy:</string>
+    <string name="about_license">License:</string>
+    <string name="about_third_party">Third-party licenses:</string>
+    <string name="about_source">App source code (as required by the AGPL):</string>
+    <string name="about_contact">Contact:</string>
+    <string name="about_readme_url" translatable="false"><u>https://github.com/reelee81/PdfLabelPrinting/blob/main/README.md</u></string>
+    <string name="about_privacy_url" translatable="false"><u>https://github.com/reelee81/PdfLabelPrinting/blob/main/PRIVACY_POLICY.md</u></string>
+    <string name="about_license_url" translatable="false"><u>https://github.com/reelee81/PdfLabelPrinting/blob/main/LICENSE</u></string>
+    <string name="about_third_party_url" translatable="false"><u>https://github.com/reelee81/PdfLabelPrinting/blob/main/THIRD_PARTY_LICENSES.md</u></string>
+    <string name="about_source_url" translatable="false"><u>https://github.com/reelee81/PdfLabelPrinting</u></string>
+    <string name="about_contact_email" translatable="false"><u>reelee81@gmail.com</u></string>
+    <string name="no_app_can_open_link">No app can open the link</string>
+    <string name="no_email_app">No email app found</string>
 </resources>

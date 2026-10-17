@@ -6,6 +6,7 @@ import com.itextpdf.io.source.RandomAccessSourceFactory
 import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfBoolean
+import com.itextpdf.kernel.pdf.PdfDate
 import com.itextpdf.kernel.pdf.PdfDictionary
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfName
@@ -16,6 +17,7 @@ import com.itextpdf.kernel.pdf.PdfPage
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfResources
 import com.itextpdf.kernel.pdf.PdfStream
+import com.itextpdf.kernel.pdf.PdfString
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.WriterProperties
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
@@ -23,6 +25,7 @@ import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -31,10 +34,12 @@ internal object PdfEditProjection {
 
     class NotProjectableException(message: String) : Exception(message)
 
-    private val EDIT_BASE = PdfName("PdfLabelEditBase")
-    private val EDIT_FORM = PdfName("PdfLabelEdit")
-    private val LAYER_TAG = PdfName("PdfLabelEditLayer")
-    private val LAYER_SOURCE = PdfName("PdfLabelEditSource")
+    private val PIECE_NAME = PdfName("PdfLabelPrinting")
+    private val BASE = PdfName("Base")
+    private val LAYER_FORM = PdfName("LayerForm")
+    private val LAYER = PdfName("Layer")
+    private val SOURCE = PdfName("Source")
+    private val GENERATION = PdfName("Gen")
     private val STREAMS = PdfName("Streams")
     private val LENGTH = PdfName("Length")
     private val CELLS = PdfName("Cells")
@@ -42,7 +47,9 @@ internal object PdfEditProjection {
     private const val MAX_DEPTH = 8
     private const val SCAN_BATCH_FACTOR = 10
 
-    fun markPlpPage(page: PdfPage, cells: List<Cell>) {
+    fun newGeneration(): String = UUID.randomUUID().toString()
+
+    fun markPlpPage(page: PdfPage, cells: List<Cell>, generation: String) {
         val streams = page.contentStreamCount
         var length = 0L
         for (index in 0 until streams) length += page.getContentStream(index).bytes.size
@@ -51,20 +58,35 @@ internal object PdfEditProjection {
             array.add(PdfNumber(cell.sourceIndex))
             for (value in cell.matrix) array.add(PdfNumber(value))
         }
-        page.pdfObject.put(EDIT_BASE, PdfDictionary().apply {
+        writablePrivateData(page.pdfObject).put(BASE, PdfDictionary().apply {
             put(STREAMS, PdfNumber(streams))
             put(LENGTH, PdfNumber(length.toDouble()))
             put(CELLS, array)
+            put(GENERATION, PdfString(generation))
         })
     }
 
-    fun tagLayerSource(form: PdfFormXObject, sourceIndex: Int) {
-        val xObjects = form.pdfObject.getAsDictionary(PdfName.Resources)?.getAsDictionary(PdfName.XObject) ?: return
-        for (name in xObjects.keySet()) {
-            val stream = xObjects.getAsStream(name) ?: continue
-            if (stream.containsKey(LAYER_TAG)) stream.put(LAYER_SOURCE, PdfNumber(sourceIndex))
+    fun tagLayerSource(form: PdfFormXObject, sourcePage: PdfPage, sourceIndex: Int, generation: String) {
+        val layer = sourceLayer(sourcePage) ?: return
+        val reference = layer.indirectReference
+        val sourceXObjects = sourcePage.resources.pdfObject.getAsDictionary(PdfName.XObject) ?: return
+        val name = sourceXObjects.keySet().firstOrNull { key ->
+            val stream = sourceXObjects.getAsStream(key)
+            stream === layer || (reference != null && stream?.indirectReference == reference)
+        } ?: return
+        val copied = form.pdfObject.getAsDictionary(PdfName.Resources)
+            ?.getAsDictionary(PdfName.XObject)
+            ?.getAsStream(name) ?: return
+        writablePrivateData(copied).apply {
+            put(LAYER, PdfBoolean.TRUE)
+            put(SOURCE, PdfNumber(sourceIndex))
+            put(GENERATION, PdfString(generation))
         }
     }
+
+    fun isEditLayer(stream: PdfStream): Boolean = privateData(stream)?.getAsBool(LAYER) == true
+
+    fun containsEditLayer(resources: PdfDictionary): Boolean = layersOf(resources, generation = null).isNotEmpty()
 
     fun inverse(m: DoubleArray): DoubleArray? {
         val det = m[0] * m[3] - m[1] * m[2]
@@ -91,7 +113,7 @@ internal object PdfEditProjection {
                 chunk.any { number ->
                     val page = pdf.getPage(number)
                     appendedFrom(page) != null ||
-                        layersOf(page.resources.pdfObject).any { it.bytes.isNotEmpty() }
+                        layersOf(page).any { it.bytes.isNotEmpty() }
                 }
             }
             if (found) return true
@@ -134,7 +156,7 @@ internal object PdfEditProjection {
                             removeContentStreamsFrom(page, streams)
                             cleared++
                         }
-                        for (layer in layersOf(page.resources.pdfObject)) {
+                        for (layer in layersOf(page)) {
                             if (layer.bytes.isEmpty()) continue
                             layer.remove(PdfName.Filter)
                             layer.remove(PdfName.DecodeParms)
@@ -174,10 +196,10 @@ internal object PdfEditProjection {
             PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { pdf ->
                 for (number in from..to) {
                     val page = pdf.getPage(number)
-                    val base = page.pdfObject.getAsDictionary(EDIT_BASE)
+                    val base = pageBase(page)
                         ?: throw NotProjectableException("page $number has no layout record")
-                    for (layer in layersOf(page.resources.pdfObject)) {
-                        val sourceIndex = layer.getAsNumber(LAYER_SOURCE)?.intValue() ?: continue
+                    for (layer in layersOf(page)) {
+                        val sourceIndex = privateData(layer)?.getAsNumber(SOURCE)?.intValue() ?: continue
                         if (layer.bytes.isEmpty()) removals += sourceIndex
                     }
                     val streams = base.getAsNumber(STREAMS)?.intValue() ?: -1
@@ -240,7 +262,7 @@ internal object PdfEditProjection {
     }
 
     private fun appendedFrom(page: PdfPage): Int? {
-        val base = page.pdfObject.getAsDictionary(EDIT_BASE) ?: return null
+        val base = pageBase(page) ?: return null
         val streams = base.getAsNumber(STREAMS)?.intValue() ?: return null
         if (streams < 0 || page.contentStreamCount <= streams) return null
         var length = 0L
@@ -264,7 +286,33 @@ internal object PdfEditProjection {
             .setFullCompressionMode(true)
             .setCompressionLevel(CompressionConstants.BEST_SPEED)
 
-    private fun layersOf(resources: PdfDictionary?): List<PdfStream> {
+    private fun privateData(dictionary: PdfDictionary): PdfDictionary? =
+        dictionary.getAsDictionary(PdfName.PieceInfo)
+            ?.getAsDictionary(PIECE_NAME)
+            ?.getAsDictionary(PdfName.Private)
+
+    private fun writablePrivateData(dictionary: PdfDictionary): PdfDictionary {
+        val modified = PdfDate().pdfObject
+        val pieceInfo = dictionary.getAsDictionary(PdfName.PieceInfo)
+            ?: PdfDictionary().also { dictionary.put(PdfName.PieceInfo, it) }
+        val piece = pieceInfo.getAsDictionary(PIECE_NAME)
+            ?: PdfDictionary().also { pieceInfo.put(PIECE_NAME, it) }
+        piece.put(PdfName.LastModified, modified)
+        dictionary.put(PdfName.LastModified, modified)
+        return piece.getAsDictionary(PdfName.Private)
+            ?: PdfDictionary().also { piece.put(PdfName.Private, it) }
+    }
+
+    private fun pageBase(page: PdfPage): PdfDictionary? = privateData(page.pdfObject)?.getAsDictionary(BASE)
+
+    private fun sourceLayer(page: PdfPage): PdfStream? = privateData(page.pdfObject)?.getAsStream(LAYER_FORM)
+
+    private fun layersOf(page: PdfPage): List<PdfStream> {
+        val generation = pageBase(page)?.getAsString(GENERATION)?.value ?: return emptyList()
+        return layersOf(page.resources.pdfObject, generation)
+    }
+
+    private fun layersOf(resources: PdfDictionary?, generation: String?): List<PdfStream> {
         val result = ArrayList<PdfStream>()
         val seen = HashSet<PdfStream>()
         fun visit(dictionary: PdfDictionary?, depth: Int) {
@@ -273,8 +321,9 @@ internal object PdfEditProjection {
             for (name in xObjects.keySet()) {
                 val stream = xObjects.getAsStream(name) ?: continue
                 if (!seen.add(stream)) continue
-                if (stream.containsKey(LAYER_TAG)) {
-                    result += stream
+                val data = privateData(stream)
+                if (data?.getAsBool(LAYER) == true) {
+                    if (generation == null || data.getAsString(GENERATION)?.value == generation) result += stream
                 } else if (stream.getAsName(PdfName.Subtype) == PdfName.Form) {
                     visit(stream.getAsDictionary(PdfName.Resources), depth + 1)
                 }
@@ -285,9 +334,9 @@ internal object PdfEditProjection {
     }
 
     private fun removeLayer(page: PdfPage) {
-        val layer = page.pdfObject.getAsStream(EDIT_FORM) ?: return
+        val layer = sourceLayer(page) ?: return
         val reference = layer.indirectReference
-        page.pdfObject.remove(EDIT_FORM)
+        privateData(page.pdfObject)?.remove(LAYER_FORM)
         val xObjects = page.pdfObject.getAsDictionary(PdfName.Resources)?.getAsDictionary(PdfName.XObject) ?: return
         val names = xObjects.keySet().filter { name ->
             val stream = xObjects.getAsStream(name)
@@ -304,15 +353,15 @@ internal object PdfEditProjection {
 
     private fun appendEdit(target: PdfPage, plpPage: PdfPage, matrix: DoubleArray) {
         val inverse = inverse(matrix) ?: return
-        val base = plpPage.pdfObject.getAsDictionary(EDIT_BASE) ?: return
+        val base = pageBase(plpPage) ?: return
         val firstNew = base.getAsNumber(STREAMS)?.intValue() ?: return
         val sourceResources = plpPage.resources.pdfObject
         val destination = target.document
 
-        val existing = target.pdfObject.getAsStream(EDIT_FORM)
+        val existing = sourceLayer(target)
         val form = existing ?: PdfFormXObject(target.mediaBox).pdfObject.also {
             it.put(PdfName.Resources, PdfDictionary())
-            it.put(LAYER_TAG, PdfBoolean.TRUE)
+            writablePrivateData(it).put(LAYER, PdfBoolean.TRUE)
         }
         val formResources = form.getAsDictionary(PdfName.Resources)
             ?: PdfDictionary().also { form.put(PdfName.Resources, it) }
@@ -338,7 +387,7 @@ internal object PdfEditProjection {
         } else {
             form.setData(chunk.toByteArray())
             form.makeIndirect(destination)
-            target.pdfObject.put(EDIT_FORM, form)
+            writablePrivateData(target.pdfObject).put(LAYER_FORM, form)
             val ownResources = PdfDictionary(target.pdfObject.getAsDictionary(PdfName.Resources) ?: PdfDictionary())
             ownResources.put(
                 PdfName.XObject,

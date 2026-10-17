@@ -23,6 +23,9 @@ class ReadOnlyPdfViewerFragment : PdfViewerFragment() {
     val isDocumentLoading: Boolean
         get() = pageNavigator.isLoading
 
+    val isAwaitingDocument: Boolean
+        get() = pageNavigator.isAwaitingDocument
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pageNavigator.restore(savedInstanceState)
@@ -38,7 +41,8 @@ class ReadOnlyPdfViewerFragment : PdfViewerFragment() {
         pageNavigator.onViewStateRestored()
     }
 
-    fun loadDocumentAtPage(uri: Uri, pageIndex: Int) {
+    fun loadDocumentAtPage(uri: Uri, pageIndex: Int, refresh: Boolean = false) {
+        if (refresh) pageNavigator.treatAsRefresh()
         if (documentUri != uri) pageNavigator.beginDocumentLoad()
         pageNavigator.scrollToPage(pageIndex)
         documentUri = uri

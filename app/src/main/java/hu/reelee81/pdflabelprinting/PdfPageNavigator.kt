@@ -29,6 +29,8 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         get() = opening && (loading || state.pendingPageIndex != null)
     private var opening = true
     private var documentShown = false
+    var isAwaitingDocument = false
+        private set
 
     private val work = Runnable {
         workPosted = false
@@ -105,9 +107,14 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         scheduleWork()
     }
 
+    fun treatAsRefresh() {
+        documentShown = true
+    }
+
     fun beginDocumentLoad() {
         loadedDocument = null
         loading = true
+        isAwaitingDocument = true
         opening = !documentShown
         visiblePageSizes.clear()
         shownPages.clear()
@@ -123,9 +130,14 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
         }
         loadedDocument = document
         scheduleWork()
+        if (isAwaitingDocument) {
+            isAwaitingDocument = false
+            onOperationStateChanged()
+        }
     }
 
     fun onDocumentError() {
+        isAwaitingDocument = false
         loading = false
         loadedDocument = null
         visiblePageSizes.clear()

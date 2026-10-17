@@ -35,9 +35,11 @@ class PdfViewer : PdfActivity() {
     private var currentUri: Uri? = null
     private var hasEditedDocument = false
     private var reloadingEditedDocument = false
+    private var returningUnedited = false
+    private var pendingReload: Pair<Uri, Int>? = null
 
     private val editLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val fragment = supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment
+        val fragment = currentFragment()
         val returnedPageIndex = result.data
             ?.getIntExtra(PdfEditorActivity.EXTRA_CURRENT_PAGE_INDEX, -1)
             ?.takeIf { it >= 0 }
@@ -49,11 +51,12 @@ class PdfViewer : PdfActivity() {
             currentUri = editedUri
             hasEditedDocument = true
             reloadingEditedDocument = true
-            fragment?.loadDocumentAtPage(editedUri, returnedPageIndex ?: fragment.currentPageIndex)
+            reloadViewerDocument(editedUri, returnedPageIndex ?: fragment?.currentPageIndex ?: 0)
 
             findViewById<MaterialToolbar>(R.id.toolbar).title = resolveDisplayName(editedUri)
             setEditedDocumentResult(editedUri)
         } else if (returnedPageIndex != null) {
+            returningUnedited = true
             fragment?.scrollToPage(returnedPageIndex)
         }
     }
@@ -121,8 +124,31 @@ class PdfViewer : PdfActivity() {
             frag.documentUri = uri
         }
 
-        addToolbarButtons(toolbar, frag)
+        addToolbarButtons(toolbar)
         onPdfOperationStateChanged()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pendingReload?.let { (uri, pageIndex) ->
+            pendingReload = null
+            reloadViewerDocument(uri, pageIndex)
+        }
+    }
+
+    private fun currentFragment(): ReadOnlyPdfViewerFragment? =
+        supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment
+
+    private fun reloadViewerDocument(uri: Uri, pageIndex: Int) {
+        if (supportFragmentManager.isStateSaved) {
+            pendingReload = uri to pageIndex
+            return
+        }
+        val replacement = ReadOnlyPdfViewerFragment()
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.pdfFragContainer, replacement, FRAG_TAG)
+            .commitNow()
+        replacement.loadDocumentAtPage(uri, pageIndex, refresh = true)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -136,14 +162,27 @@ class PdfViewer : PdfActivity() {
             ?.isPageNavigationInProgress == true
 
     override fun onPdfNavigationStateChanged(inProgress: Boolean) {
-        if (!inProgress) reloadingEditedDocument = false
+        if (!inProgress) {
+            reloadingEditedDocument = false
+            returningUnedited = false
+        }
     }
 
     override fun leavesOnPdfWaitCancel(): Boolean = reloadingEditedDocument && isPdfNavigationInProgress()
 
+    override fun pdfNavigationCaption(): Int = when {
+        reloadingEditedDocument -> R.string.pdf_wait_reading_edited_pages
+        returningUnedited -> R.string.pdf_wait_reading_unedited_pages
+        else -> R.string.pdf_wait_reading_pages
+    }
+
     override fun isPdfDocumentLoading(): Boolean =
         (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
             ?.isDocumentLoading == true
+
+    override fun isPdfDocumentOpening(): Boolean =
+        (supportFragmentManager.findFragmentByTag(FRAG_TAG) as? ReadOnlyPdfViewerFragment)
+            ?.isAwaitingDocument == true
 
     private fun setEditedDocumentResult(uri: Uri) {
         setResult(
@@ -157,7 +196,7 @@ class PdfViewer : PdfActivity() {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 18
 
-    private fun addToolbarButtons(toolbar: MaterialToolbar, frag: ReadOnlyPdfViewerFragment) {
+    private fun addToolbarButtons(toolbar: MaterialToolbar) {
         val buttonSize = resources.getDimensionPixelSize(R.dimen.dp_32)
         val oldSearchRightMargin = toolbar.contentInsetStartWithNavigation +
                 resources.getDimensionPixelSize(R.dimen.dp_10)
@@ -179,8 +218,9 @@ class PdfViewer : PdfActivity() {
                 (layoutParams as LinearLayout.LayoutParams).marginEnd =
                     resources.getDimensionPixelSize(R.dimen.dp_4)
                 setOnClickListener {
-                    if (frag.isPageNavigationInProgress) return@setOnClickListener
-                    frag.isTextSearchActive = true
+                    val current = currentFragment() ?: return@setOnClickListener
+                    if (current.isPageNavigationInProgress) return@setOnClickListener
+                    current.isTextSearchActive = true
                 }
             }
         )
@@ -189,12 +229,13 @@ class PdfViewer : PdfActivity() {
             buttons.addView(
                 createToolbarIconButton(R.drawable.ic_edit_24, getString(R.string.edit_pdf), buttonSize).apply {
                     setOnClickListener {
-                        if (frag.isPageNavigationInProgress) return@setOnClickListener
+                        val current = currentFragment() ?: return@setOnClickListener
+                        if (current.isPageNavigationInProgress) return@setOnClickListener
                         val editUri = currentUri ?: return@setOnClickListener
                         editLauncher.launch(
                             Intent(this@PdfViewer, PdfEditorActivity::class.java).apply {
                                 putExtra(PdfEditorActivity.EXTRA_INPUT_URI, editUri.toString())
-                                putExtra(PdfEditorActivity.EXTRA_INITIAL_PAGE_INDEX, frag.currentPageIndex)
+                                putExtra(PdfEditorActivity.EXTRA_INITIAL_PAGE_INDEX, current.currentPageIndex)
                                 putExtra(
                                     PdfEditorActivity.EXTRA_BATCH_SIZE,
                                     intent.getIntExtra(EXTRA_BATCH_SIZE, 1)

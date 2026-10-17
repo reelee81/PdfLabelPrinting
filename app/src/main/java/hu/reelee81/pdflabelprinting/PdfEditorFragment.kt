@@ -27,6 +27,9 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
     val isDocumentLoading: Boolean
         get() = pageNavigator.isLoading
 
+    val isAwaitingDocument: Boolean
+        get() = pageNavigator.isAwaitingDocument
+
     val visiblePageIndices: List<Int>
         get() = pageNavigator.visiblePageIndices
 
@@ -45,7 +48,8 @@ class PdfEditorFragment : EditablePdfViewerFragment() {
         pageNavigator.onViewStateRestored()
     }
 
-    fun loadDocumentAtPage(uri: Uri, pageIndex: Int) {
+    fun loadDocumentAtPage(uri: Uri, pageIndex: Int, refresh: Boolean = false) {
+        if (refresh) pageNavigator.treatAsRefresh()
         if (documentUri != uri) pageNavigator.beginDocumentLoad()
         pageNavigator.scrollToPage(pageIndex)
         documentUri = uri
