@@ -23,6 +23,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
@@ -88,6 +89,7 @@ import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
+import androidx.core.view.doOnPreDraw
 import androidx.core.view.isVisible
 import androidx.core.view.MenuCompat
 import androidx.core.widget.NestedScrollView
@@ -97,6 +99,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
@@ -130,6 +133,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.StringReader
 import java.io.StringWriter
+import java.text.Collator
 import java.text.SimpleDateFormat
 import java.util.BitSet
 import java.util.Collections.newSetFromMap
@@ -254,6 +258,10 @@ class MainActivity : AppCompatActivity() {
         private const val PROGRESS_IDLE_MS = 1_000L
         private const val PROGRESS_NOTIFY_MS = 1_000L
         private const val PENDING_INTENT_RETRY_MS = 500L
+        private const val OPEN_WITH_COLUMNS = 4
+        private const val OPEN_WITH_ROWS = 2
+        private const val OPEN_WITH_ANIMATION_MS = 200L
+        private const val OPEN_WITH_TABLET_MIN_DP = 600
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -336,6 +344,7 @@ class MainActivity : AppCompatActivity() {
     private var orientationLockPrevRequested: Int? = null
     private var uiModeRecreateScheduled: Boolean = false
     private var lastConfigSnapshotForDiff: Configuration? = null
+    private var openWithRequest: Pair<Uri, List<OpenWithApp>>? = null
 
     @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
@@ -1165,6 +1174,11 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
 
+                    if (binding.overlayDialogOpenWith.isVisible) {
+                        binding.overlayDialogOpenWith.performClick()
+                        return
+                    }
+
                     if (binding.overlayDialogPositionOnPage.isVisible) {
                         binding.overlayDialogPositionOnPage.performClick()
                         return
@@ -1271,6 +1285,7 @@ class MainActivity : AppCompatActivity() {
             binding.overlayDialogTimestampPanel,
             binding.overlayDialogBatteryOptimizationPanel,
             binding.overlayDialogAboutPanel,
+            binding.overlayDialogOpenWithPanel,
             binding.overlayDialogPositionOnPagePanel,
             binding.overlayDialogPdfCropPanel,
             binding.overlayDialogMaxCoordinatesPanel,
@@ -1298,6 +1313,14 @@ class MainActivity : AppCompatActivity() {
         recomputeTabletLikeFlag()
 
         reapplyPanelsMaxWidthFromResources()
+
+        openWithRequest?.let { (uri, apps) ->
+            if (binding.overlayDialogOpenWith.isVisible) {
+                binding.root.post {
+                    if (openWithRequest != null) showOpenWithDialog(uri, apps, animate = false)
+                }
+            }
+        }
 
         fastScroller?.refreshDisplayMetrics()
 
@@ -7194,80 +7217,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                val baseViewIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/pdf")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val apps = withContext(Dispatchers.IO) { pdfViewerApps(uri) }
+                if (apps.isEmpty()) {
+                    Toast.makeText(this@MainActivity, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
+                    return@launch
                 }
 
-                val pm = packageManager
-                val chooserTitle = runCatching { getString(R.string.open_with) }.getOrElse { "Open with" }
-
-                if (Build.VERSION.SDK_INT >= VERSION_CODES.S) {
-                    val resolves = pm.queryIntentActivities(baseViewIntent, 0)
-                    val hasOther = resolves.any { it.activityInfo.packageName != packageName }
-                    if (!hasOther) {
-                        Toast.makeText(this@MainActivity, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
-                        return@launch
-                    }
-
-                    val ownComponents = resolves
-                        .filter { it.activityInfo.packageName == packageName }
-                        .map { ComponentName(it.activityInfo.packageName, it.activityInfo.name) }
-                        .toTypedArray()
-
-                    val chooser = Intent.createChooser(baseViewIntent, chooserTitle).apply {
-                        if (ownComponents.isNotEmpty()) {
-                            putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, ownComponents)
-                        }
-                    }
-
-                    val old = StrictMode.allowThreadDiskReads()
-                    try {
-                        startActivity(chooser)
-                        scheduleCacheCleanupAfterExternalReturn()
-                    } finally {
-                        StrictMode.setThreadPolicy(old)
-                    }
-                } else {
-                    val resolves = pm.queryIntentActivities(baseViewIntent, 0)
-                    val others = resolves.filter { it.activityInfo.packageName != packageName }
-                    if (others.isEmpty()) {
-                        Toast.makeText(this@MainActivity, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
-                        return@launch
-                    }
-
-                    val ownComponents = resolves
-                        .filter { it.activityInfo.packageName == packageName }
-                        .map { ComponentName(it.activityInfo.packageName, it.activityInfo.name) }
-
-                    ownComponents.forEach {
-                        pm.setComponentEnabledSetting(
-                            it,
-                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                            PackageManager.DONT_KILL_APP
-                        )
-                    }
-
-                    val old = StrictMode.allowThreadDiskReads()
-                    try {
-                        startActivity(Intent.createChooser(baseViewIntent, chooserTitle))
-                        scheduleCacheCleanupAfterExternalReturn()
-                    } catch (_: Exception) {
-                        Toast.makeText(this@MainActivity, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
-                    } finally {
-                        StrictMode.setThreadPolicy(old)
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            ownComponents.forEach { comp ->
-                                pm.setComponentEnabledSetting(
-                                    comp,
-                                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                                    PackageManager.DONT_KILL_APP
-                                )
-                            }
-                        }, 500)
-                    }
-                }
+                showOpenWithDialog(uri, apps)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -7278,6 +7234,195 @@ class MainActivity : AppCompatActivity() {
         }
         activeJobs.add(job)
         job.invokeOnCompletion { activeJobs.remove(job) }
+    }
+
+    private class OpenWithApp(
+        val label: CharSequence,
+        val icon: Drawable,
+        val packageName: String,
+        val activityName: String
+    )
+
+    private class OpenWithPagerAdapter(
+        private val pages: List<List<OpenWithApp>>,
+        private val rows: Int,
+        private val onPick: (OpenWithApp) -> Unit
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+
+        override fun getItemCount(): Int = pages.size
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val page = LayoutInflater.from(parent.context).inflate(R.layout.item_open_with_page, parent, false)
+            return object : RecyclerView.ViewHolder(page) {}
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            val page = holder.itemView as LinearLayout
+            page.removeAllViews()
+            val apps = pages[position]
+            val inflater = LayoutInflater.from(page.context)
+
+            for (r in 0 until rows) {
+                val row = LinearLayout(page.context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                for (c in 0 until OPEN_WITH_COLUMNS) {
+                    val cell = inflater.inflate(R.layout.item_open_with_app, row, false)
+                    cell.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    val app = apps.getOrNull(r * OPEN_WITH_COLUMNS + c)
+                    if (app == null) {
+                        cell.visibility = View.INVISIBLE
+                    } else {
+                        cell.findViewById<AppCompatImageView>(R.id.open_with_icon).setImageDrawable(app.icon)
+                        cell.findViewById<MaterialTextView>(R.id.open_with_label).text = app.label
+                        cell.setOnClickListener { onPick(app) }
+                    }
+                    row.addView(cell)
+                }
+                page.addView(row)
+            }
+        }
+    }
+
+    @WorkerThread
+    private fun pdfViewerApps(uri: Uri): List<OpenWithApp> {
+        val viewIntent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/pdf")
+        val collator = Collator.getInstance(Locale.getDefault())
+        return packageManager.queryIntentActivities(viewIntent, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .map {
+                OpenWithApp(
+                    label = it.loadLabel(packageManager),
+                    icon = it.loadIcon(packageManager),
+                    packageName = it.activityInfo.packageName,
+                    activityName = it.activityInfo.name
+                )
+            }
+            .sortedWith(compareBy(collator) { it.label.toString() })
+    }
+
+    private fun showOpenWithDialog(uri: Uri, apps: List<OpenWithApp>, animate: Boolean = true) {
+        val overlay = binding.overlayDialogOpenWith
+        val panel = binding.overlayDialogOpenWithPanel
+
+        openWithRequest = uri to apps
+
+        panel.removeAllViews()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_open_with, panel, false)
+        panel.addView(dialogView)
+
+        fun close() {
+            openWithRequest = null
+            overlay.visibility = View.GONE
+            overlay.setOnClickListener(null)
+            panel.removeAllViews()
+        }
+
+        fun cancel() {
+            close()
+            lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
+        }
+
+        overlay.setOnClickListener { cancel() }
+        panel.setOnClickListener {
+        }
+        dialogView.findViewById<Button>(R.id.open_with_btn_cancel).setOnClickListener { cancel() }
+
+        val config = resources.configuration
+        val phoneLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                config.smallestScreenWidthDp < OPEN_WITH_TABLET_MIN_DP
+        val rows = if (apps.size <= OPEN_WITH_COLUMNS || phoneLandscape) 1 else OPEN_WITH_ROWS
+        val pages = apps.chunked(rows * OPEN_WITH_COLUMNS)
+
+        val pager = RecyclerView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            layoutManager = LinearLayoutManager(this@MainActivity, LinearLayoutManager.HORIZONTAL, false)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isNestedScrollingEnabled = false
+        }
+        dialogView.findViewById<FrameLayout>(R.id.open_with_pager_container).addView(pager)
+
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        pager.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            private var downX = 0f
+            private var downY = 0f
+
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = e.x
+                        downY = e.y
+                        rv.parent.requestDisallowInterceptTouchEvent(rv.canScrollHorizontally(1) || rv.canScrollHorizontally(-1))
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = abs(e.x - downX)
+                        val dy = abs(e.y - downY)
+                        if (dy > touchSlop && dy > dx) rv.parent.requestDisallowInterceptTouchEvent(false)
+                    }
+                }
+                return false
+            }
+        })
+        pager.adapter = OpenWithPagerAdapter(pages, rows) { app ->
+            close()
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/pdf")
+                setClassName(app.packageName, app.activityName)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                startActivity(viewIntent)
+                scheduleCacheCleanupAfterExternalReturn()
+            } catch (_: Exception) {
+                Toast.makeText(this, getString(R.string.no_app_can_open_pdf), Toast.LENGTH_LONG).show()
+                lifecycleScope.launch(Dispatchers.IO) { cleanupCacheExceptTemps() }
+            }
+        }
+        val snapHelper = PagerSnapHelper()
+        snapHelper.attachToRecyclerView(pager)
+
+        val dots = dialogView.findViewById<LinearLayout>(R.id.open_with_dots)
+        dots.isVisible = pages.size > 1
+        repeat(pages.size) {
+            LayoutInflater.from(this).inflate(R.layout.item_open_with_dot, dots, true)
+        }
+
+        fun selectDot(index: Int) {
+            for (i in 0 until dots.childCount) dots.getChildAt(i).isSelected = (i == index)
+        }
+        selectDot(0)
+
+        pager.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState != RecyclerView.SCROLL_STATE_IDLE) return
+                val lm = recyclerView.layoutManager ?: return
+                val snapView = snapHelper.findSnapView(lm) ?: return
+                selectDot(lm.getPosition(snapView))
+            }
+        })
+
+        if (!animate) {
+            overlay.alpha = 1f
+            panel.translationY = 0f
+            overlay.visibility = View.VISIBLE
+            return
+        }
+
+        overlay.alpha = 0f
+        overlay.visibility = View.VISIBLE
+        panel.doOnPreDraw {
+            panel.translationY = panel.height.toFloat()
+            overlay.animate().alpha(1f).setDuration(OPEN_WITH_ANIMATION_MS).start()
+            panel.animate().translationY(0f).setDuration(OPEN_WITH_ANIMATION_MS).start()
+        }
     }
 
     private fun printNupPdf() {
