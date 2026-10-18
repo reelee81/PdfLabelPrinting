@@ -12,7 +12,6 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -50,11 +49,9 @@ class PdfRevisionRecoveryTest {
 
     @Test
     fun theSuppliedOverwrittenFileOpensFromItsValidRevision() {
-        val input = listOf(File("Teszt_PDF_ek/03_test_pdfs/issue9418.pdf"), File("../Teszt_PDF_ek/03_test_pdfs/issue9418.pdf"))
-            .firstOrNull { it.isFile }
-        assumeTrue("Local PDF review fixture is not present", input != null)
+        val input = TestPdfs.file("issue9418.pdf")
         var pages = 0
-        val recovered = PdfRevisionRecovery.withEarlierRevision(input!!, temporary.root, {}, ::hasPages) { revision ->
+        val recovered = PdfRevisionRecovery.withEarlierRevision(input, temporary.root, {}, ::hasPages) { revision ->
             pages = PdfDocument(PdfReader(revision)).use { it.numberOfPages }
         }
         assertTrue(recovered)

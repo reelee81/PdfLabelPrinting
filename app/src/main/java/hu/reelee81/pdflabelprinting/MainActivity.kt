@@ -262,6 +262,7 @@ class MainActivity : AppCompatActivity() {
         private const val OPEN_WITH_ROWS = 2
         private const val OPEN_WITH_ANIMATION_MS = 200L
         private const val OPEN_WITH_TABLET_MIN_DP = 600
+        private const val MIN_CELL_MM = 1f
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -4437,12 +4438,20 @@ class MainActivity : AppCompatActivity() {
     private fun currentNupConfigFromInputs(): NupConfig {
         val rows     = readIntOr(numberOfRows,    min = 1, def = 1)
         val cols     = readIntOr(numberOfColumns, min = 1, def = 1)
-        val marginMm = readIntOr(margin,          min = 0, def = 0)
         val isLand = landscape.isChecked
+        val marginMm = min(readIntOr(margin, min = 0, def = 0), maxMarginMm(rows, cols, isLand))
         val drawFrame = drawFrameSwitch.isChecked
         val scaleInd = scaleSwitch.isChecked
         val fitInd = fitSwitch.isChecked
         return NupConfig(rows, cols, marginMm, isLand, drawFrame, scaleInd, fitInd)
+    }
+
+    private fun maxMarginMm(rows: Int, cols: Int, isLandscape: Boolean): Int {
+        val page = if (isLandscape) PageSize.A4.rotate() else PageSize.A4
+        val minCellPt = MIN_CELL_MM * 72f / 25.4f
+        val widthLimit = (page.width - cols * minCellPt) / (cols + 1)
+        val heightLimit = (page.height - rows * minCellPt) / (rows + 1)
+        return floor(min(widthLimit, heightLimit) * 25.4f / 72f).toInt().coerceAtLeast(0)
     }
 
     private fun nupConfigChanged(): Boolean {

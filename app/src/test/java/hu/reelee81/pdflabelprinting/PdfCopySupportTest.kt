@@ -15,12 +15,10 @@ import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.font.PdfFontFactory
 import com.itextpdf.kernel.pdf.canvas.parser.PdfTextExtractor
 import java.io.ByteArrayOutputStream
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -135,7 +133,7 @@ class PdfCopySupportTest {
 
     @Test
     fun layeredFixtureClosesAfterCopiedObjectFlush() {
-        val file = fixture("bug1737260.pdf")
+        val file = TestPdfs.file("bug1737260.pdf")
         val output = temporary.newFile("layers.pdf")
         PdfDocument(PdfReader(file.absolutePath).setMemorySavingMode(true)).use { source ->
             PdfDocument(PdfWriter(output.absolutePath)).use { destination ->
@@ -164,7 +162,7 @@ class PdfCopySupportTest {
 
     @Test
     fun mergedPushButtonFixtureCanBeImported() {
-        val file = fixture("160F-2019.pdf")
+        val file = TestPdfs.file("160F-2019.pdf")
         val output = temporary.newFile("buttons.pdf")
         PdfDocument(PdfWriter(output.absolutePath)).use { destination ->
             val count = PdfDocument(PdfReader(file.absolutePath)).use { it.numberOfPages }
@@ -187,7 +185,7 @@ class PdfCopySupportTest {
     fun malformedIdentityCmapIsRepairedWithoutReplacingTheEmbeddedFont() {
         val output = temporary.newFile("encoding.pdf")
         var originalFont: ByteArray? = null
-        PdfDocument(PdfReader(fixture("bug920426.pdf").absolutePath)).use { source ->
+        PdfDocument(PdfReader(TestPdfs.file("bug920426.pdf").absolutePath)).use { source ->
             val font = source.getPage(1).resources.pdfObject.getAsDictionary(PdfName.Font).getAsDictionary(PdfName("F1"))
             originalFont = font.getAsArray(PdfName.DescendantFonts).getAsDictionary(0)
                 .getAsDictionary(PdfName.FontDescriptor).getAsStream(PdfName.FontFile2).bytes
@@ -230,12 +228,5 @@ class PdfCopySupportTest {
             PdfIdentityCMapRepair.repair(page)
             assertEquals(PdfName("Identity-H"), font.getAsName(PdfName.ToUnicode))
         }
-    }
-
-    private fun fixture(name: String): File {
-        val file = listOf(File("Teszt_PDF_ek/03_test_pdfs/$name"), File("../Teszt_PDF_ek/03_test_pdfs/$name"))
-            .firstOrNull { it.isFile }
-        assumeTrue("Local PDF review fixtures are not present", file != null)
-        return requireNotNull(file)
     }
 }

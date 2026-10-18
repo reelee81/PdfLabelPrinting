@@ -154,6 +154,13 @@ Typical build commands:
 
 In Android Studio, simply open the project directory.
 
+Some unit tests use real-world PDF files: regression tests for earlier fixes look up specific files by name,
+and the form and annotation import test uses every PDF in a `Forms_and_annotations` folder.
+Put them into the `work/00_test_PDFs` folder, in any subfolders; `work/00_test_PDFs/README.md` lists the needed
+files and where to get them. Without them these tests are skipped. The tests write their results into
+`work/00_test_PDFs_work`. Both folders are described in their own README, and the files placed in them are never
+committed.
+
 
 ## License
 

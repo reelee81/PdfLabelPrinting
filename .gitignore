@@ -11,7 +11,15 @@ app/release/
 .claude/
 .codex/
 docs/
-work/
+
+# Local work folder: only the descriptions of the test PDF folders are tracked
+/work/*
+!/work/00_test_PDFs/
+/work/00_test_PDFs/*
+!/work/00_test_PDFs/README.md
+!/work/00_test_PDFs_work/
+/work/00_test_PDFs_work/*
+!/work/00_test_PDFs_work/README.md
 
 # Local config
 local.properties

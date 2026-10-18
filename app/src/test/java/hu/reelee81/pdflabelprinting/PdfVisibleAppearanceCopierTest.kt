@@ -570,18 +570,15 @@ class PdfVisibleAppearanceCopierTest {
 
     @Test
     fun suppliedMixedPdfsCanBeImportedWithReopenedSinglePageBatches() {
-        val folder = listOf(
-            File("Teszt_PDF_ek/02_urlapmezos_anotacios_teszt_pdf_ek"),
-            File("../Teszt_PDF_ek/02_urlapmezos_anotacios_teszt_pdf_ek")
-        )
-            .firstOrNull { it.isDirectory }
-        assumeTrue("Local PDF review fixtures are not present", folder != null)
-        val outputFolder = File("build/appearance-review").apply { mkdirs() }
+        val folder = TestPdfs.folder("Forms_and_annotations")
+        val files = folder.walkTopDown().filter { it.isFile && it.extension.equals("pdf", true) }.sortedBy { it.path }.toList()
+        assumeTrue("The Forms_and_annotations folder contains no PDF", files.isNotEmpty())
+        val outputFolder = TestPdfs.outputFolder("Appearance_review")
         val combined = ByteArrayOutputStream()
         var totalPages = 0
         PdfDocument(PdfWriter(combined)).use { destination ->
             destination.setFlushUnusedObjects(true)
-            for (file in folder!!.listFiles().orEmpty().filter { it.extension == "pdf" }.sortedBy { it.name }) {
+            for (file in files) {
                 val pageCount = PdfDocument(PdfReader(file.absolutePath)).use { it.numberOfPages }
                 val perFile = ByteArrayOutputStream()
                 PdfDocument(PdfWriter(perFile)).use { document ->
@@ -598,7 +595,8 @@ class PdfVisibleAppearanceCopierTest {
                     }
                 }
                 val result = import(perFile.toByteArray(), asXObject = true)
-                Files.write(File(outputFolder, file.name).toPath(), result)
+                val outputName = file.relativeTo(folder).path.replace(File.separatorChar, '_')
+                Files.write(File(outputFolder, outputName).toPath(), result)
                 totalPages += pageCount
             }
         }
