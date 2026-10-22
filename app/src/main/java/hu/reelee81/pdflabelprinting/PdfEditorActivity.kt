@@ -36,6 +36,8 @@ import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.utils.PdfAnnotationFlattener
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import hu.reelee81.pdflabelprinting.pdf.PdfEditProjection
+import hu.reelee81.pdflabelprinting.pdf.PdfIo
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -561,7 +563,7 @@ class PdfEditorActivity : PdfActivity() {
     private fun CoroutineScope.flattenAnnotationsInto(file: File, flatFile: File) {
         ITextPdfDocument(
             PdfReader(file.absolutePath),
-            PdfWriter(flatFile.absolutePath, PdfEditProjection.writerProperties())
+            PdfWriter(flatFile.absolutePath, PdfIo.writerProperties())
         ).use { pdf ->
             val flattener = PdfAnnotationFlattener()
             val progress = progressStage(pdf.numberOfPages.toLong())

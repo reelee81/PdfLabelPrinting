@@ -114,6 +114,23 @@ class PdfPageNavigationStateTest {
     }
 
     @Test
+    fun lastLandscapePageOverhangingByASubPixelCountsAsReached() {
+        assertTrue(PdfPageNavigationState.isPageReached(0f, 1304.0073f, 1080f, 2067.19f, 0f, 0f, 1080f, 2067f))
+    }
+
+    @Test
+    fun pageCoveringTheViewportCentreCountsAsReached() {
+        assertTrue(PdfPageNavigationState.isPageReached(0f, -300f, 1080f, 1200f, 0f, 0f, 1080f, 2067f))
+    }
+
+    @Test
+    fun pageClearlyCutOffOrOutsideTheViewportIsNotReached() {
+        assertFalse(PdfPageNavigationState.isPageReached(0f, 1304f, 1080f, 2069f, 0f, 0f, 1080f, 2067f))
+        assertFalse(PdfPageNavigationState.isPageReached(0f, 2100f, 1080f, 2800f, 0f, 0f, 1080f, 2067f))
+        assertFalse(PdfPageNavigationState.isPageReached(1080f, 0f, 2160f, 700f, 0f, 0f, 1080f, 2067f))
+    }
+
+    @Test
     fun documentErrorReleasesPendingRequest() {
         val state = PdfPageNavigationState()
         state.request(100)

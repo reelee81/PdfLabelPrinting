@@ -49,4 +49,24 @@ internal class PdfPageNavigationState {
         pendingPageIndex = null
         scrollIssued = false
     }
+
+    companion object {
+        const val EDGE_TOLERANCE_PX = 1f
+
+        fun isPageReached(
+            left: Float,
+            top: Float,
+            right: Float,
+            bottom: Float,
+            viewLeft: Float,
+            viewTop: Float,
+            viewRight: Float,
+            viewBottom: Float
+        ): Boolean {
+            val centerY = viewTop + (viewBottom - viewTop) / 2f
+            return right > viewLeft && left < viewRight &&
+                (centerY in top..bottom ||
+                    (top >= viewTop - EDGE_TOLERANCE_PX && bottom <= viewBottom + EDGE_TOLERANCE_PX))
+        }
+    }
 }

@@ -31,3 +31,5 @@ plugins {
 
 rootProject.name = "PDF Label Printing"
 include(":app")
+include(":core")
+include(":pdf")

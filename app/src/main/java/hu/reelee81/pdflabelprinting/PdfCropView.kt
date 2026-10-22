@@ -9,6 +9,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.ContextCompat
+import hu.reelee81.pdflabelprinting.core.PdfCropRect
 import kotlin.math.abs
 import kotlin.math.min
 

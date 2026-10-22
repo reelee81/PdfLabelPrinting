@@ -15,14 +15,8 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.LinearGradient
 import android.graphics.Matrix
-import android.graphics.Paint
 import android.graphics.Rect
-import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -76,7 +70,6 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.annotation.WorkerThread
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.content.res.AppCompatResources
@@ -94,8 +87,11 @@ import androidx.core.view.isVisible
 import androidx.core.view.MenuCompat
 import androidx.core.widget.NestedScrollView
 import androidx.core.widget.TextViewCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.withStarted
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -112,20 +108,47 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textview.MaterialTextView
 import com.itextpdf.io.image.ImageDataFactory
-import com.itextpdf.kernel.colors.ColorConstants
-import com.itextpdf.kernel.exceptions.BadPasswordException
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
-import com.itextpdf.kernel.pdf.CompressionConstants
 import com.itextpdf.kernel.pdf.EncryptionConstants
-import com.itextpdf.kernel.pdf.PdfArray
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfWriter
-import com.itextpdf.kernel.pdf.ReaderProperties
 import com.itextpdf.kernel.pdf.WriterProperties
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
+import hu.reelee81.pdflabelprinting.core.IncomingFileKind
+import hu.reelee81.pdflabelprinting.core.IncomingFileKind.isSupportedImageFileName
+import hu.reelee81.pdflabelprinting.core.IncomingFileKind.isSupportedImageMime
+import hu.reelee81.pdflabelprinting.core.NupConfig
+import hu.reelee81.pdflabelprinting.core.NupGeometry.DEFAULT_POSITION
+import hu.reelee81.pdflabelprinting.core.NupGeometry.maxMarginMm
+import hu.reelee81.pdflabelprinting.core.NupGeometry.validPosition
+import hu.reelee81.pdflabelprinting.core.OutputFileName
+import hu.reelee81.pdflabelprinting.core.PageSizes
+import hu.reelee81.pdflabelprinting.core.PdfCropRect
+import hu.reelee81.pdflabelprinting.core.PdfCrops
+import hu.reelee81.pdflabelprinting.core.PdfOperationKind
+import hu.reelee81.pdflabelprinting.core.PdfOperationResult
+import hu.reelee81.pdflabelprinting.core.PdfOperationRunner
+import hu.reelee81.pdflabelprinting.core.PdfOperationScreen
+import hu.reelee81.pdflabelprinting.core.PdfOperationState
+import hu.reelee81.pdflabelprinting.core.ProfileLoadRebuild
+import hu.reelee81.pdflabelprinting.core.ProgressNotifyPacing
+import hu.reelee81.pdflabelprinting.core.SignatureGeometry
+import hu.reelee81.pdflabelprinting.core.SignatureGeometry.refPxForSignatureDpi
+import hu.reelee81.pdflabelprinting.core.WorkFileBackup
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
+import hu.reelee81.pdflabelprinting.pdf.MuPdfSignedPageRenderer
+import hu.reelee81.pdflabelprinting.pdf.PdfCopySupport
+import hu.reelee81.pdflabelprinting.pdf.PdfImportOperation
+import hu.reelee81.pdflabelprinting.pdf.PdfIo
+import hu.reelee81.pdflabelprinting.pdf.PdfLayoutChangeOperation
+import hu.reelee81.pdflabelprinting.pdf.PdfPageSizes
+import hu.reelee81.pdflabelprinting.pdf.PdfProgress
+import hu.reelee81.pdflabelprinting.pdf.PdfSignOperation
+import hu.reelee81.pdflabelprinting.pdf.PdfViewerEditOperation
+import hu.reelee81.pdflabelprinting.pdf.ProgressTracker
+import hu.reelee81.pdflabelprinting.pdf.SignedPageRenderer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -134,15 +157,10 @@ import java.io.IOException
 import java.io.StringReader
 import java.io.StringWriter
 import java.text.Collator
-import java.text.SimpleDateFormat
 import java.util.BitSet
-import java.util.Collections.newSetFromMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.Date
 import java.util.Locale
-import java.util.WeakHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.math.abs
@@ -150,18 +168,15 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.round
-import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.yield
 import org.xmlpull.v1.XmlPullParser
 
 class MainActivity : AppCompatActivity() {
@@ -225,22 +240,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_THEME_RESTORE_ROTATION_CSV = "key_theme_restore_rotation_csv"
         const val KEY_THEME_RESTORE_POSITION_CSV = "key_theme_restore_position_csv"
         const val KEY_THEME_RESTORE_CROP = "key_theme_restore_crop"
-        const val KEY_BACKUP_SELECTED = "backup_selected"
-        const val KEY_BACKUP_THUMB_FIRST = "backup_thumb_first"
-        const val KEY_BACKUP_THUMB_OFFSET = "backup_thumb_offset"
-        const val KEY_BACKUP_ROWS = "backup_rows"
-        const val KEY_BACKUP_COLUMNS = "backup_columns"
-        const val KEY_BACKUP_MARGIN = "backup_margin"
-        const val KEY_BACKUP_ORIENTATION = "backup_orientation"
-        const val KEY_BACKUP_DRAW_FRAME = "backup_draw_frame"
-        const val KEY_BACKUP_SCALE = "backup_scale"
-        const val KEY_BACKUP_FIT = "backup_fit"
-        const val KEY_BACKUP_ROTATION = "backup_rotation"
-        const val KEY_BACKUP_POSITION = "backup_position"
-        const val KEY_BACKUP_DEFAULT_POSITION = "backup_default_position"
-        const val KEY_BACKUP_CROP = "backup_crop"
         const val DEFAULT_SIG_POS_X_MM = 155
-        const val DEFAULT_POSITION = 5
         const val DEFAULT_SIG_POS_Y_MM = 245
 
         private const val SOURCE_TEMP_NAME = "source_temp.pdf"
@@ -248,22 +248,20 @@ class MainActivity : AppCompatActivity() {
         private const val PLP_TEMP_NAME = "plp_temp.pdf"
         private const val SOURCE_TEMP_COPY_NAME = "source_temp_copy.pdf"
         private const val PLP_TEMP_COPY_NAME = "plp_temp_copy.pdf"
-        private const val MAX_BASE_LEN = 251
         private const val MAX_INPUT = 100
         private const val KEEP_RECENT_EXPORTS = 0
         private const val MAX_IMG_W = 8411
         private const val MAX_IMG_H = 8411
         private const val PROGRESS_TICK_MS = 500L
-        private const val PROGRESS_REVEAL_MS = 5_000L
         private const val PROGRESS_IDLE_MS = 1_000L
-        private const val PROGRESS_NOTIFY_MS = 1_000L
         private const val PENDING_INTENT_RETRY_MS = 500L
         private const val OPEN_WITH_COLUMNS = 4
         private const val OPEN_WITH_ROWS = 2
         private const val OPEN_WITH_ANIMATION_MS = 200L
         private const val OPEN_WITH_TABLET_MIN_DP = 600
-        private const val MIN_CELL_MM = 1f
     }
+
+    private class ThumbRestore(val targetIndex: Int?, val offsetPx: Int, val selected: Set<Int>?)
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var viewModel: PageItemsViewModel
@@ -271,7 +269,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var timeStamp: String
     private lateinit var pdfPickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var pdfViewerLauncher: ActivityResultLauncher<Intent>
-    private lateinit var progressDialog: AlertDialog
     private lateinit var signaturesDir: File
     private lateinit var signaturePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var numberOfRows: TextInputEditText
@@ -309,8 +306,6 @@ class MainActivity : AppCompatActivity() {
     private var fastScroller: AlwaysVisibleFastScroller? = null
     private var orderDirty = false
     private var lastGlobalAllSelected: Boolean? = null
-    private var lastGrantedViewUri: Uri? = null
-    private var lastGrantedPkg: String? = null
     private var selectedDpiIndexForSignature = 0
     private var didRunNScrollColdStartFix = false
     private var isFirstCreate = true
@@ -336,7 +331,6 @@ class MainActivity : AppCompatActivity() {
     private var isUiBlockedByProgress: Boolean = false
     private var lastNightMask: Int = -1
     private var pendingUiModeRecreate: Boolean = false
-    private var signaturePositionEditorDialog: AlertDialog? = null
     private var signaturePositionEditorRerender: (() -> Unit)? = null
     private var savedSoftInputModeForOverlay: Int? = null
     private var passwordOverlayOwnsSecureFlag = false
@@ -346,23 +340,21 @@ class MainActivity : AppCompatActivity() {
     private var uiModeRecreateScheduled: Boolean = false
     private var lastConfigSnapshotForDiff: Configuration? = null
     private var openWithRequest: Pair<Uri, List<OpenWithApp>>? = null
+    private var operationOverlay = false
+    private var operationId: Long? = null
+    private var operationRestore: ThumbRestore? = null
+    private var discardOperation = false
+    private var handoverId: Long? = null
 
     @Volatile private var isSigningCancelled: Boolean = false
     @Volatile private var isPlpRebuilding = false
-    @Volatile private var clearSelectionOnNextRebuild = false
     @Volatile private var isFoldableDevice: Boolean = false
     @Volatile private var deferOrientationUnlockUntilThumbnailsReady: Boolean = false
     @Volatile private var deferredOrientationUnlockRequested: Boolean = false
     @Volatile private var reloadThumbnailsGeneration: Long = 0L
     @Volatile private var lastNamedExport: File? = null
-    @Volatile private var progressTotal = 0L
-    @Volatile private var progressIdleSince = 0L
-    @Volatile private var progressGeneration = 0L
-    @Volatile private var progressAccepting = true
 
-    private val progressDone = AtomicLong(0L)
-    private var progressStartedAt = 0L
-    private var progressLastPercent = -1
+    private val progressTracker = ProgressTracker(SystemClock::uptimeMillis)
     private var progressMessage = ""
     private var progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
     private var progressNotifiedAt = 0L
@@ -372,40 +364,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private inner class ProgressStage(private val generation: Long) {
-        fun advance(units: Int) {
-            if (generation != progressGeneration) throw CancellationException()
-            progressDone.addAndGet(units.toLong())
-            progressIdleSince = 0L
-        }
-
-        fun idle() {
-            if (generation == progressGeneration && progressIdleSince == 0L) {
-                progressIdleSince = SystemClock.uptimeMillis()
-            }
-        }
-    }
-
     private val prefsBackupLock = Any()
     private val rvHeightUpdateRunnable = Runnable {
         applyRvThumbnailsHeight()
     }
 
-    private data class NupConfig(
-        val rows: Int,
-        val cols: Int,
-        val marginMm: Int,
-        val isLandscape: Boolean,
-        val drawFrame: Boolean,
-        val scaleIndividually: Boolean,
-        val fitIndividually: Boolean
-    )
-
     private val activeJobs = CopyOnWriteArrayList<Job>()
     private val pendingIncomingIntents = ArrayDeque<Intent>()
     private val pendingIncomingIntentRetry = Runnable { processPendingIncomingIntents() }
     private val workspaceFilesCheck = Runnable { checkWorkspaceFiles() }
-    private val plpSizedDialogs: MutableSet<AlertDialog> = newSetFromMap(WeakHashMap())
 
     private val savePrefsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && result.data?.data != null) {
@@ -482,7 +449,17 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
 
         if (savedInstanceState == null) {
-            clearCacheDir()
+            val operations = PdfOperations.runner(this)
+            when (val start = PdfOperationScreen.onFreshStart(operations.state.value)) {
+                is PdfOperationScreen.FreshStart.Discard -> {
+                    discardOperation = true
+                    operations.cancel(start.cancel)
+                }
+                is PdfOperationScreen.FreshStart.ClearCache -> {
+                    start.acknowledge?.let { operations.acknowledge(it) }
+                    clearCacheDir()
+                }
+            }
         }
 
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
@@ -627,12 +604,12 @@ class MainActivity : AppCompatActivity() {
 
         portrait.setOnCheckedChangeListener { _, checked ->
             updateSignatureInputFilters()
-            if (checked) maybeRegeneratePlpOnSettingChange()
+            if (checked) maybeRegeneratePlpOnSettingChange(isLandscape = false)
         }
 
         landscape.setOnCheckedChangeListener { _, checked ->
             updateSignatureInputFilters()
-            if (checked) maybeRegeneratePlpOnSettingChange()
+            if (checked) maybeRegeneratePlpOnSettingChange(isLandscape = true)
         }
 
         drawFrameSwitch.setOnCheckedChangeListener { _, _ ->
@@ -651,8 +628,6 @@ class MainActivity : AppCompatActivity() {
         setupRegenerateOnBlur(numberOfRows)
         setupRegenerateOnBlur(numberOfColumns)
         setupRegenerateOnBlur(margin)
-
-        progressDialog = AlertDialog.Builder(this).create()
 
         viewModel = ViewModelProvider(this)[PageItemsViewModel::class.java]
         val pageItems = viewModel.pageItems
@@ -999,6 +974,8 @@ class MainActivity : AppCompatActivity() {
             ?.getIntArray("state_source_position")
             ?.let { sourcePosition = it }
 
+        val operationPending = PdfOperationScreen.isPending(PdfOperations.runner(this).state.value)
+
         runCatching {
             val sp = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
 
@@ -1072,30 +1049,42 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                if (needLockAtStart) {
-                    showInProgressUpdateUI(getString(R.string.in_progress_ui))
-                    lockScreenOrientation()
-                }
-
-                reloadThumbnailsFromPlp(
-                    targetIndex = restFirst.takeIf { it != RecyclerView.NO_POSITION },
-                    targetOffsetPx = restOffset,
-                    restorePrevious = false,
-                    indicesToSelect = indicesToSelect,
-                    releaseUiAtStart = false,
-                    onStarted = {
-                        hideInProgressIfShownUpdateUI()
-                        unlockScreenOrientation()
-                        synchronized(prefsBackupLock) {
-                            val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                            spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
-                        }
+                if (operationPending) {
+                    operationRestore = ThumbRestore(restFirst.takeIf { it != RecyclerView.NO_POSITION }, restOffset, indicesToSelect)
+                    synchronized(prefsBackupLock) {
+                        sp.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                     }
-                )
+                } else {
+                    if (needLockAtStart) {
+                        showInProgressUpdateUI(getString(R.string.in_progress_ui))
+                        lockScreenOrientation()
+                    }
+
+                    reloadThumbnailsFromPlp(
+                        targetIndex = restFirst.takeIf { it != RecyclerView.NO_POSITION },
+                        targetOffsetPx = restOffset,
+                        restorePrevious = false,
+                        indicesToSelect = indicesToSelect,
+                        releaseUiAtStart = false,
+                        onStarted = {
+                            hideInProgressIfShownUpdateUI()
+                            unlockScreenOrientation()
+                            synchronized(prefsBackupLock) {
+                                val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+                                spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                            }
+                        }
+                    )
+                }
 
                 if (nsvY >= 0) {
                     val nsv = findViewById<NestedScrollView>(R.id.root_scroll)
                     nsv?.post { nsv.scrollTo(0, nsvY) }
+                }
+            } else if (operationPending) {
+                operationRestore = ThumbRestore(null, 0, null)
+                synchronized(prefsBackupLock) {
+                    sp.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                 }
             } else {
                 if (needLockAtStart) {
@@ -1116,24 +1105,33 @@ class MainActivity : AppCompatActivity() {
             }
         }.onFailure {
             val spLock = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            val needLock = synchronized(prefsBackupLock) {
-                spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
-            }
-            if (needLock) {
-                showInProgressUpdateUI(getString(R.string.in_progress_ui))
-                lockScreenOrientation()
-            }
-
-            reloadThumbnailsFromPlp(
-                onStarted = {
-                    hideInProgressIfShownUpdateUI()
-                    unlockScreenOrientation()
-                    synchronized(prefsBackupLock) {
-                        spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
-                    }
+            if (operationPending) {
+                operationRestore = ThumbRestore(null, 0, null)
+                synchronized(prefsBackupLock) {
+                    spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
                 }
-            )
+            } else {
+                val needLock = synchronized(prefsBackupLock) {
+                    spLock.getBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false)
+                }
+                if (needLock) {
+                    showInProgressUpdateUI(getString(R.string.in_progress_ui))
+                    lockScreenOrientation()
+                }
+
+                reloadThumbnailsFromPlp(
+                    onStarted = {
+                        hideInProgressIfShownUpdateUI()
+                        unlockScreenOrientation()
+                        synchronized(prefsBackupLock) {
+                            spLock.edit { putBoolean(KEY_RESTORE_LOCK_UNTIL_RELOAD, false) }
+                        }
+                    }
+                )
+            }
         }
+
+        observeOperations()
 
         updateButtonsState()
 
@@ -1211,30 +1209,11 @@ class MainActivity : AppCompatActivity() {
     private fun sourceWorkFile(): File = File(cacheDir, SOURCE_TEMP_WORK)
     private fun plpTempFile(): File = File(cacheDir, PLP_TEMP_NAME)
 
-    private fun backupTempFilesBeforeLongOperation() {
-        val sourceTemp = sourceTempFile()
-        if (sourceTemp.exists()) {
-            val sourceCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
-            runCatching {
-                FileInputStream(sourceTemp).use { input ->
-                    FileOutputStream(sourceCopy, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
-        }
+    private fun workFileBackup(): WorkFileBackup =
+        WorkFileBackup(cacheDir, SOURCE_TEMP_NAME, PLP_TEMP_NAME, SOURCE_TEMP_COPY_NAME, PLP_TEMP_COPY_NAME)
 
-        val plpTemp = plpTempFile()
-        if (plpTemp.exists()) {
-            val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
-            runCatching {
-                FileInputStream(plpTemp).use { input ->
-                    FileOutputStream(plpCopy, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
-        }
+    private fun backupTempFilesBeforeLongOperation() {
+        workFileBackup().backup()
     }
 
     private fun scheduleUiModeRecreate() {
@@ -1544,7 +1523,8 @@ class MainActivity : AppCompatActivity() {
         binding.overlayProgressDialog.isVisible ||
             binding.overlayProgressDialogUpdateUi.isVisible ||
             binding.overlayDialogPassword.isVisible ||
-            activeJobs.any { it.isActive }
+            activeJobs.any { it.isActive } ||
+            PdfOperationScreen.isPending(PdfOperations.runner(this).state.value)
 
     private fun checkWorkspaceFiles() {
         binding.root.removeCallbacks(workspaceFilesCheck)
@@ -1598,36 +1578,13 @@ class MainActivity : AppCompatActivity() {
             val mtLc = mt?.lowercase(Locale.ROOT)
             val nameLc = try { extractFileName(uri).lowercase(Locale.ROOT) } catch (_: Exception) { "" }
 
-            val explicitNonPdf =
-                (mtLc?.startsWith("image/") ?: false) ||
-                        (mtLc?.startsWith("text/")  ?: false) ||
-                        (mtLc?.startsWith("audio/") ?: false) ||
-                        (mtLc?.startsWith("video/") ?: false)
-            if (explicitNonPdf) return
-
-            val isPdfMime = mtLc?.contains("pdf") ?: false
-            val isPdfName = nameLc.endsWith(".pdf")
-
-            val isUnknownApp = when (mtLc) {
-                null -> true
-                "application/octet-stream" -> true
-                else -> mtLc.startsWith("application/")
-            }
-
-            val looksPdf = isPdfMime || isPdfName || isUnknownApp
-            if (looksPdf) collected.add(uri)
+            if (IncomingFileKind.looksLikePdf(mtLc, nameLc)) collected.add(uri)
         }
 
         fun processUris(uris: List<Uri>) {
             if (uris.isEmpty()) return
 
             val startProcessing = {
-                val backupJob = lifecycleScope.launch {
-                    backupSelectionState()
-                }
-                activeJobs.add(backupJob)
-                backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
                 if (uris.size == 1) {
                     handlePdfUri(uris.first())
                 } else {
@@ -1719,163 +1676,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun handlePdfUrisBatch(uris: List<Uri>) {
         if (uris.isEmpty()) return
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdx = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val oldPer = run {
-            val last = lastBuiltNupConfig ?: currentNupConfigFromInputs()
-            (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
-        }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val oldPageCount = sourceTempPageCount()
-
-                val selectedSrcPages: Set<Int> = if (selectedIdx.isNotEmpty() && oldPageCount > 0) {
-                    buildSet {
-                        selectedIdx.forEach { g ->
-                            val start = g * oldPer + 1
-                            val end = min(oldPageCount, start + oldPer - 1)
-                            for (p in start..end) add(p)
-                        }
-                    }
-                } else emptySet()
-
-                fun isBadPassword(t: Throwable): Boolean {
-                    if (t is BadPasswordException) return true
-                    val msg = t.message?.lowercase().orEmpty()
-                    return msg.contains("bad user password") || msg.contains("bad password")
-                }
-
-                var progressStarted = false
-
-                for (uri in uris) {
-                    val tempSrc = File(cacheDir, "${timeStamp}_${extractFileName(uri)}")
-                    try {
-                        contentResolver.openInputStream(uri)?.use { inputStream ->
-                            FileOutputStream(tempSrc).use { outputStream ->
-                                val buffer = ByteArray(4096)
-                                var bytesRead: Int
-                                while (inputStream.read(buffer).also { bytesRead = it } > 0) {
-                                    outputStream.write(buffer, 0, bytesRead)
-                                }
-                            }
-                        } ?: throw IOException(getString(R.string.input_stream_is_null))
-
-                        var passwordBytes: ByteArray? = null
-                        var attempt = 0
-                        var openFailure: Exception? = null
-
-                        while (true) {
-                            val canOpen = try {
-                                val (encrypted, pageCount) = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use {
-                                    it.reader.isEncrypted to it.numberOfPages
-                                }
-                                if (pageCount == 0) openFailure = IOException(getString(R.string.no_source_pages))
-                                !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                if (isBadPassword(e)) {
-                                    false
-                                } else {
-                                    openFailure = e
-                                    true
-                                }
-                            }
-
-                            if (canOpen) break
-
-                            if (progressStarted) {
-                                withContext(Dispatchers.Main) {
-                                    hideInProgressIfShown()
-                                    unlockScreenOrientation()
-                                }
-                                progressStarted = false
-                            }
-
-                            val entered: String? = withContext(Dispatchers.Main) {
-                                promptForPdfPassword(showError = (attempt > 0))
-                            }
-
-                            if (entered.isNullOrEmpty()) {
-                                withContext(Dispatchers.Main) {
-                                    hideInProgressIfShown()
-                                    unlockScreenOrientation()
-                                }
-                                tempSrc.delete()
-                                return@launch
-                            }
-
-                            passwordBytes = entered.toByteArray(Charsets.UTF_8)
-                            attempt++
-                        }
-
-                        if (!progressStarted) {
-                            withContext(Dispatchers.Main) {
-                                showInProgress(getString(R.string.in_progress_opening))
-                                lockScreenOrientation()
-                            }
-                            progressStarted = true
-                        }
-
-                        appendPdfToSourceTempOrRepair(tempSrc, passwordBytes, openFailure) { ensureActive() }
-
-                    } finally {
-                        runCatching { tempSrc.delete() }
-                    }
-                }
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("handlePdfUrisBatch")
-
-                    val per = perGroup()
-                    val indicesToSelectAfter: Set<Int> =
-                        if (selectedSrcPages.isNotEmpty())
-                            selectedSrcPages.map { p -> (p - 1) / per }.toSet()
-                        else emptySet()
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = indicesToSelectAfter,
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.error_loading_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        importPdfUris(uris, detectImages = false)
     }
 
     private fun isTouchInsideView(ev: MotionEvent, view: View): Boolean {
@@ -2110,18 +1911,7 @@ class MainActivity : AppCompatActivity() {
         validateInputs()
     }
 
-    private fun deleteDir(dir: File?): Boolean {
-        if (dir != null && dir.isDirectory) {
-            val children = dir.list()
-            if (children != null) for (child in children) if (!deleteDir(File(dir, child))) return false
-            return dir.delete()
-        } else if (dir != null && dir.isFile) {
-            return dir.delete()
-        }
-        return false
-    }
-
-    private fun showMaxCoordinatesAlert(maxXi: Int, maxYi: Int) {
+    private fun showMaxCoordinatesAlert(maxXi: Int, maxYi: Int, imageTooLarge: Boolean) {
         val overlay = binding.overlayDialogMaxCoordinates
         val panel = binding.overlayDialogMaxCoordinatesPanel
 
@@ -2138,22 +1928,15 @@ class MainActivity : AppCompatActivity() {
         panel.setOnClickListener {
         }
 
+        val maxCoordinates = getString(R.string.max_coordinates_x_y_mm, maxXi, maxYi)
         dialogView.findViewById<MaterialTextView>(R.id.dmc_text)?.text =
-            getString(R.string.max_coordinates_x_y_mm, maxXi, maxYi)
+            if (imageTooLarge) "${getString(R.string.signature_image_too_large)}\n$maxCoordinates" else maxCoordinates
 
         val btnOk = dialogView.findViewById<Button>(R.id.dmc_btn_ok)
 
         btnOk?.setOnClickListener {
             overlay.visibility = View.GONE
             overlay.setOnClickListener(null)
-        }
-    }
-
-    private fun refPxForSignatureDpi(idx: Int): Float {
-        return when (idx) {
-            0 -> 1190f
-            1 -> 2480f
-            else -> 1190f
         }
     }
 
@@ -2494,20 +2277,14 @@ class MainActivity : AppCompatActivity() {
                                         }
 
                                         val isLand = landscape.isChecked
-                                        val a4Wmm  = if (isLand) 297f else 210f
-                                        val a4Hmm  = if (isLand) 210f else 297f
-                                        val refAxisMm = if (isLand) a4Hmm else a4Wmm
-                                        val mmPerSigPx = refAxisMm / refPxForSignatureDpi(dpiSelectedIndex)
-                                        val imgWmm = pxW * mmPerSigPx
-                                        val imgHmm = pxH * mmPerSigPx
-
-                                        val maxXf = a4Wmm - imgWmm
-                                        val maxYf = a4Hmm - imgHmm
+                                        val (maxXf, maxYf) = SignatureGeometry.maxPositionMm(
+                                            pxW, pxH, refPxForSignatureDpi(dpiSelectedIndex), isLand
+                                        )
                                         val maxXi = floor(maxXf).toInt()
                                         val maxYi = floor(maxYf).toInt()
 
                                         if (maxXf < 0f || maxYf < 0f) {
-                                            showMaxCoordinatesAlert(maxXi, maxYi)
+                                            showMaxCoordinatesAlert(maxXi, maxYi, imageTooLarge = true)
                                             return@launch
                                         }
 
@@ -2648,15 +2425,9 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val isLand = landscape.isChecked
-                    val a4Wmm  = if (isLand) 297f else 210f
-                    val a4Hmm  = if (isLand) 210f else 297f
-                    val refAxisMm = if (isLand) a4Hmm else a4Wmm
-                    val mmPerSigPx = refAxisMm / refPxForSignatureDpi(dpiSelectedIndex)
-                    val imgWmm = pxW * mmPerSigPx
-                    val imgHmm = pxH * mmPerSigPx
-
-                    val maxXf = a4Wmm - imgWmm
-                    val maxYf = a4Hmm - imgHmm
+                    val (maxXf, maxYf) = SignatureGeometry.maxPositionMm(
+                        pxW, pxH, refPxForSignatureDpi(dpiSelectedIndex), isLand
+                    )
                     val maxXi = floor(maxXf).toInt()
                     val maxYi = floor(maxYf).toInt()
 
@@ -2670,13 +2441,15 @@ class MainActivity : AppCompatActivity() {
                         overlay.setOnClickListener(null)
 
                         window?.decorView?.post {
-                            showMaxCoordinatesAlert(maxXi, maxYi)
+                            showMaxCoordinatesAlert(maxXi, maxYi, imageTooLarge = maxXf < 0f || maxYf < 0f)
                         }
                         return@launch
                     }
 
                     signSelectedPagesOnSourceTemp(
-                        signatureFilePath = sigFile.absolutePath,
+                        signatureFile = sigFile,
+                        signatureWidth = pxW,
+                        signatureHeight = pxH,
                         inputXMM = inputXmm,
                         inputYMM = inputYmm,
                         applyScanEffect = applyScanEffect,
@@ -2853,7 +2626,6 @@ class MainActivity : AppCompatActivity() {
         panel.setOnClickListener {
         }
 
-        signaturePositionEditorDialog = null
         signaturePositionEditorRerender = null
 
         val btnCancel = dialogView.findViewById<MaterialButton>(R.id.sp_btn_cancel)
@@ -2942,7 +2714,6 @@ class MainActivity : AppCompatActivity() {
         fun dismissWithResult(xmm: Float?, ymm: Float?) {
             if (!finished.compareAndSet(false, true)) return
 
-            signaturePositionEditorDialog = null
             signaturePositionEditorRerender = null
 
             overlay.visibility = View.GONE
@@ -3164,12 +2935,11 @@ class MainActivity : AppCompatActivity() {
                 pxPerMMX = pageBmp.width.toFloat() / a4Wmm
                 pxPerMMY = pageBmp.height.toFloat() / a4Hmm
 
-                val refAxisMm = if (isLand) a4Hmm else a4Wmm
-                val mmPerSigPx = refAxisMm / currentSignatureRefPx()
-                val imgWmm = sigBounds.outWidth  * mmPerSigPx
-                val imgHmm = sigBounds.outHeight * mmPerSigPx
-                val rawMaxXmm = (a4Wmm - imgWmm).coerceAtLeast(0f)
-                val rawMaxYmm = (a4Hmm - imgHmm).coerceAtLeast(0f)
+                val (maxXmm, maxYmm) = SignatureGeometry.maxPositionMm(
+                    sigBounds.outWidth, sigBounds.outHeight, currentSignatureRefPx(), isLand
+                )
+                val rawMaxXmm = maxXmm.coerceAtLeast(0f)
+                val rawMaxYmm = maxYmm.coerceAtLeast(0f)
                 allowedMaxXmm = floor(rawMaxXmm)
                 allowedMaxYmm = floor(rawMaxYmm)
                 val allowedMaxLeftPx = floor(allowedMaxXmm * pxPerMMX).toInt()
@@ -3367,14 +3137,15 @@ class MainActivity : AppCompatActivity() {
         }.onFailure {
         }
 
-        signaturePositionEditorDialog?.let { dlg ->
-            if (dlg.isShowing) dlg.dismiss()
-        }
-        signaturePositionEditorDialog = null
         signaturePositionEditorRerender = null
         saveCurrentSettings()
         (findViewById<RecyclerView>(R.id.rv_thumbnails).adapter as? ThumbnailAdapter)?.close()
-        if (isFinishing && !isChangingConfigurations) clearCacheDir()
+        handoverId?.let { PdfOperations.runner(this).abandon(it) }
+        if (isFinishing && !isChangingConfigurations) {
+            val operations = PdfOperations.runner(this)
+            PdfOperationScreen.onFinishing(operations.state.value)?.let { operations.cancel(it) }
+            clearCacheDir()
+        }
         super.onDestroy()
     }
 
@@ -3696,8 +3467,7 @@ class MainActivity : AppCompatActivity() {
             scaleSwitch.isChecked = data["nlScale"] as Boolean
             fitSwitch.isChecked = data["nlFit"] as Boolean
             fitSwitch.isEnabled = scaleSwitch.isChecked
-            defaultPosition = validPosition(data["nlPosition"] as Int)
-            sourcePosition.fill(defaultPosition)
+            val profilePosition = validPosition(data["nlPosition"] as Int)
             cropAllPages = data["nlCrop"] as Boolean
             batchPage.setText(data["nlBatchPage"] as String)
             passwordOutCb.isChecked = data["nlPasswordOut"] as Boolean
@@ -3718,9 +3488,23 @@ class MainActivity : AppCompatActivity() {
 
             isLoadingSettingsProfile = false
 
+            var positionsGoWithRebuild = false
             if (regenRequestedDuringProfileLoad && plpTempFile().exists()) {
                 regenRequestedDuringProfileLoad = false
-                regeneratePlpAsyncAndReloadThumbnails()
+                val rebuildNeeded = ProfileLoadRebuild.isNeeded(
+                    built = lastBuiltNupConfig,
+                    loaded = currentNupConfigFromInputs(),
+                    positions = sourcePosition,
+                    oldDefaultPosition = defaultPosition,
+                    newDefaultPosition = profilePosition
+                )
+                if (rebuildNeeded) {
+                    positionsGoWithRebuild = regeneratePlpAsyncAndReloadThumbnails(profilePosition = profilePosition)
+                }
+            }
+            if (!positionsGoWithRebuild) {
+                defaultPosition = profilePosition
+                sourcePosition.fill(defaultPosition)
             }
         }
     }
@@ -4043,88 +3827,41 @@ class MainActivity : AppCompatActivity() {
         }
 
         withContext(Dispatchers.IO) {
-            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            synchronized(prefsBackupLock) {
-                prefs.edit {
-                    remove(KEY_BACKUP_SELECTED)
-                    remove(KEY_BACKUP_THUMB_FIRST)
-                    remove(KEY_BACKUP_THUMB_OFFSET)
-
-                    putString(KEY_BACKUP_SELECTED, selectedCsv)
-                    putInt(KEY_BACKUP_THUMB_FIRST, firstPos)
-                    putInt(KEY_BACKUP_THUMB_OFFSET, topOffset)
-                }
-            }
+            longOperationStateBackup().saveSelection(selectedCsv, firstPos, topOffset)
         }
     }
+
+    private fun longOperationStateBackup(): LongOperationStateBackup =
+        LongOperationStateBackup(getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE), prefsBackupLock)
 
     private fun backupUiStateBeforeLongOperation() {
         runCatching {
             val cfg = lastBuiltNupConfig ?: currentNupConfigFromInputs()
 
-            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
+            val backup = longOperationStateBackup()
             val rotationCsv = sourceRotation.joinToString(",")
 
-            synchronized(prefsBackupLock) {
-                prefs.edit {
-                    remove(KEY_BACKUP_ROWS)
-                    remove(KEY_BACKUP_COLUMNS)
-                    remove(KEY_BACKUP_MARGIN)
-                    remove(KEY_BACKUP_ORIENTATION)
-                    remove(KEY_BACKUP_DRAW_FRAME)
-                    remove(KEY_BACKUP_SCALE)
-                    remove(KEY_BACKUP_FIT)
-                    remove(KEY_BACKUP_ROTATION)
-                    remove(KEY_BACKUP_POSITION)
-                    remove(KEY_BACKUP_DEFAULT_POSITION)
-                    remove(KEY_BACKUP_CROP)
-
-                    putString(KEY_BACKUP_ROWS, cfg.rows.toString())
-                    putString(KEY_BACKUP_COLUMNS, cfg.cols.toString())
-                    putString(KEY_BACKUP_MARGIN, cfg.marginMm.toString())
-                    putBoolean(KEY_BACKUP_ORIENTATION, !cfg.isLandscape)
-                    putBoolean(KEY_BACKUP_DRAW_FRAME, cfg.drawFrame)
-                    putBoolean(KEY_BACKUP_SCALE, cfg.scaleIndividually)
-                    putBoolean(KEY_BACKUP_FIT, cfg.fitIndividually)
-                    putString(KEY_BACKUP_ROTATION, rotationCsv)
-                    putString(KEY_BACKUP_POSITION, sourcePosition.joinToString(","))
-                    putInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
-                    putString(KEY_BACKUP_CROP, PdfCrops.encode(sourceCrop))
-                }
-            }
+            backup.saveLayout(
+                cfg,
+                rotationCsv,
+                sourcePosition.joinToString(","),
+                defaultPosition,
+                PdfCrops.encode(sourceCrop)
+            )
         }.onFailure {
         }
     }
 
     private fun clearBackupStateKeysFromPrefs() {
         runCatching {
-            val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-            synchronized(prefsBackupLock) {
-                prefs.edit {
-                    remove(KEY_BACKUP_SELECTED)
-                    remove(KEY_BACKUP_THUMB_FIRST)
-                    remove(KEY_BACKUP_THUMB_OFFSET)
-                    remove(KEY_BACKUP_ROWS)
-                    remove(KEY_BACKUP_COLUMNS)
-                    remove(KEY_BACKUP_MARGIN)
-                    remove(KEY_BACKUP_ORIENTATION)
-                    remove(KEY_BACKUP_DRAW_FRAME)
-                    remove(KEY_BACKUP_SCALE)
-                    remove(KEY_BACKUP_FIT)
-                    remove(KEY_BACKUP_ROTATION)
-                    remove(KEY_BACKUP_POSITION)
-                    remove(KEY_BACKUP_DEFAULT_POSITION)
-                    remove(KEY_BACKUP_CROP)
-                }
-            }
+            longOperationStateBackup().clear()
         }.onFailure {
         }
     }
 
     private fun cancelLongRunningWorkAndCleanup() {
         isSigningCancelled = true
-        progressGeneration++
-        progressAccepting = false
+        progressTracker.cancel()
 
         reloadThumbnailsGeneration++
 
@@ -4137,152 +3874,83 @@ class MainActivity : AppCompatActivity() {
             activeJobs.joinAll()
             activeJobs.clear()
 
-            val selectedIdxBeforeCancel: Set<Int>
-            val thumbFirstBeforeCancel: Int
-            val thumbOffsetBeforeCancel: Int
-
-            val rowsBeforeCancel: String
-            val columnsBeforeCancel: String
-            val marginBeforeCancel: String
-            val isPortraitBeforeCancel: Boolean
-            val drawFrameBeforeCancel: Boolean
-            val scaleBeforeCancel: Boolean
-            val fitBeforeCancel: Boolean
-            val rotationCsvBeforeCancel: String
-            val positionCsvBeforeCancel: String
-            val defaultPositionBeforeCancel: Int
-            val cropBeforeCancel: String
-
-            withContext(Dispatchers.IO) {
-                val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
-                synchronized(prefsBackupLock) {
-                    selectedIdxBeforeCancel = prefs.getString(KEY_BACKUP_SELECTED, "")
-                        ?.split(',')
-                        ?.mapNotNull { it.toIntOrNull() }
-                        ?.toSet()
-                        ?: emptySet()
-
-                    thumbFirstBeforeCancel = prefs.getInt(KEY_BACKUP_THUMB_FIRST, RecyclerView.NO_POSITION)
-                    thumbOffsetBeforeCancel = prefs.getInt(KEY_BACKUP_THUMB_OFFSET, 0)
-
-                    rowsBeforeCancel = prefs.getString(KEY_BACKUP_ROWS, "1") ?: "1"
-                    columnsBeforeCancel = prefs.getString(KEY_BACKUP_COLUMNS, "1") ?: "1"
-                    marginBeforeCancel = prefs.getString(KEY_BACKUP_MARGIN, "0") ?: "0"
-                    isPortraitBeforeCancel = prefs.getBoolean(KEY_BACKUP_ORIENTATION, true)
-                    drawFrameBeforeCancel = prefs.getBoolean(KEY_BACKUP_DRAW_FRAME, false)
-                    scaleBeforeCancel = prefs.getBoolean(KEY_BACKUP_SCALE, false)
-                    fitBeforeCancel = prefs.getBoolean(KEY_BACKUP_FIT, false)
-                    rotationCsvBeforeCancel = prefs.getString(KEY_BACKUP_ROTATION, "") ?: ""
-                    positionCsvBeforeCancel = prefs.getString(KEY_BACKUP_POSITION, "") ?: ""
-                    defaultPositionBeforeCancel = prefs.getInt(KEY_BACKUP_DEFAULT_POSITION, defaultPosition)
-                    cropBeforeCancel = prefs.getString(KEY_BACKUP_CROP, "") ?: ""
-                }
-            }
-
-            clearBackupStateKeysFromPrefs()
-
-            val sourceBackup = File(cacheDir, SOURCE_TEMP_COPY_NAME)
-            val plpBackup = File(cacheDir, PLP_TEMP_COPY_NAME)
-
-            var restoredPlpBackup = false
-
-            cacheDir.listFiles()?.forEach { f ->
-                if (f != sourceBackup && f != plpBackup) {
-                    runCatching { f.delete() }
-                }
-            }
-
-            if (sourceBackup.exists()) {
-                val sourceFile = sourceTempFile()
-                runCatching {
-                    FileInputStream(sourceBackup).use { input ->
-                        FileOutputStream(sourceFile, false).use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                }
-
-                runCatching { sourceBackup.delete() }
-            }
-
-            if (plpBackup.exists()) {
-                val plpFile = plpTempFile()
-                runCatching {
-                    FileInputStream(plpBackup).use { input ->
-                        FileOutputStream(plpFile, false).use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                }.onSuccess {
-                    restoredPlpBackup = true
-                }
-
-                runCatching { plpBackup.delete() }
-            }
-
-            resetThumbDocKey("cancelLongRunningWorkAndCleanup")
-
-            if (restoredPlpBackup) {
-                val prevSuppressNup = suppressNup
-                runCatching {
-                    suppressNup = true
-
-                    numberOfRows.setText(rowsBeforeCancel)
-                    numberOfColumns.setText(columnsBeforeCancel)
-                    margin.setText(marginBeforeCancel)
-
-                    portrait.isChecked = isPortraitBeforeCancel
-                    landscape.isChecked = !isPortraitBeforeCancel
-
-                    drawFrameSwitch.isChecked = drawFrameBeforeCancel
-                    scaleSwitch.isChecked = scaleBeforeCancel
-                    fitSwitch.isChecked = fitBeforeCancel
-                    fitSwitch.isEnabled = scaleSwitch.isChecked
-
-                    lastBuiltNupConfig = NupConfig(
-                        rowsBeforeCancel.toIntOrNull() ?: 1,
-                        columnsBeforeCancel.toIntOrNull() ?: 1,
-                        marginBeforeCancel.toIntOrNull() ?: 0,
-                        !isPortraitBeforeCancel,
-                        drawFrameBeforeCancel,
-                        scaleBeforeCancel,
-                        fitBeforeCancel
-                    )
-
-                    sourceRotation = if (rotationCsvBeforeCancel.isNotEmpty()) {
-                        rotationCsvBeforeCancel.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
-                    } else {
-                        IntArray(0)
-                    }
-
-                    sourcePosition = positionCsvBeforeCancel.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
-                    defaultPosition = validPosition(defaultPositionBeforeCancel)
-                    sourceCrop = PdfCrops.decode(cropBeforeCancel)
-
-                    suppressNup = prevSuppressNup
-                }.onFailure {
-                    suppressNup = prevSuppressNup
-                }
-            }
-
-            progressAccepting = true
-            reloadThumbnailsFromPlp(
-                targetIndex = thumbFirstBeforeCancel.takeIf { it != RecyclerView.NO_POSITION },
-                targetOffsetPx = thumbOffsetBeforeCancel,
-                restorePrevious = true,
-                indicesToSelect = selectedIdxBeforeCancel,
-                releaseUiAtStart = false,
-                onStarted = {
-                    unlockScreenOrientation()
-                    hideInProgressIfShownUpdateUI()
-                    isSigningCancelled = false
-                }
-            )
+            restoreAfterCancel { workFileBackup().restore() }
         }
+    }
+
+    private suspend fun restoreAfterCancel(restorePlpBackup: () -> Boolean) {
+        val saved = withContext(Dispatchers.IO) {
+            longOperationStateBackup().read(defaultPosition)
+        }
+
+        clearBackupStateKeysFromPrefs()
+
+        val restoredPlpBackup = restorePlpBackup()
+
+        resetThumbDocKey("cancelLongRunningWorkAndCleanup")
+
+        if (restoredPlpBackup) {
+            val prevSuppressNup = suppressNup
+            runCatching {
+                suppressNup = true
+
+                numberOfRows.setText(saved.rows)
+                numberOfColumns.setText(saved.columns)
+                margin.setText(saved.margin)
+
+                portrait.isChecked = saved.isPortrait
+                landscape.isChecked = !saved.isPortrait
+
+                drawFrameSwitch.isChecked = saved.drawFrame
+                scaleSwitch.isChecked = saved.scale
+                fitSwitch.isChecked = saved.fit
+                fitSwitch.isEnabled = scaleSwitch.isChecked
+
+                lastBuiltNupConfig = NupConfig(
+                    saved.rows.toIntOrNull() ?: 1,
+                    saved.columns.toIntOrNull() ?: 1,
+                    saved.margin.toIntOrNull() ?: 0,
+                    !saved.isPortrait,
+                    saved.drawFrame,
+                    saved.scale,
+                    saved.fit
+                )
+
+                sourceRotation = if (saved.rotationCsv.isNotEmpty()) {
+                    saved.rotationCsv.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+                } else {
+                    IntArray(0)
+                }
+
+                sourcePosition = saved.positionCsv.split(',').mapNotNull { it.toIntOrNull() }.toIntArray()
+                defaultPosition = validPosition(saved.defaultPosition)
+                sourceCrop = PdfCrops.decode(saved.crop)
+
+                suppressNup = prevSuppressNup
+            }.onFailure {
+                suppressNup = prevSuppressNup
+            }
+        }
+
+        progressTracker.accepting = true
+        reloadThumbnailsFromPlp(
+            targetIndex = saved.thumbFirst.takeIf { it != RecyclerView.NO_POSITION },
+            targetOffsetPx = saved.thumbOffset,
+            restorePrevious = true,
+            indicesToSelect = saved.selected,
+            releaseUiAtStart = false,
+            onStarted = {
+                unlockScreenOrientation()
+                hideInProgressIfShownUpdateUI()
+                isSigningCancelled = false
+                finishHandover()
+            }
+        )
     }
 
     private fun showInProgress(
         message: String = getString(R.string.in_progress_my),
+        forOperation: Boolean = false
     ) {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_my) }
 
@@ -4294,14 +3962,18 @@ class MainActivity : AppCompatActivity() {
         }.onFailure {
         }
 
-        PdfProcessingForegroundService.start(this, resolvedMessage)
+        if (forOperation) {
+            operationOverlay = true
+        } else {
+            PdfProcessingForegroundService.start(this, resolvedMessage)
+        }
 
         runCatching {
             val wasShowing = (binding.overlayProgressDialog.isVisible)
 
             if (!wasShowing) {
-                backupTempFilesBeforeLongOperation()
-                progressAccepting = true
+                if (!forOperation) backupTempFilesBeforeLongOperation()
+                progressTracker.accepting = true
                 resetProgress(resolvedMessage)
             }
             progressMessage = resolvedMessage
@@ -4317,7 +3989,11 @@ class MainActivity : AppCompatActivity() {
 
             val btnCancel = view.findViewById<MaterialButton>(R.id.progress_bar_cancel)
             btnCancel?.setOnClickListener {
-                cancelLongRunningWorkAndCleanup()
+                if (operationOverlay) {
+                    operationId?.let { PdfOperations.runner(this).cancel(it) }
+                } else {
+                    cancelLongRunningWorkAndCleanup()
+                }
 
                 hideInProgressIfShown()
 
@@ -4335,11 +4011,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetProgress(message: String) {
-        progressDone.set(0L)
-        progressTotal = 0L
-        progressStartedAt = SystemClock.uptimeMillis()
-        progressIdleSince = progressStartedAt
-        progressLastPercent = -1
+        progressTracker.reset()
         progressMessage = message
         progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
         progressNotifiedAt = 0L
@@ -4347,26 +4019,7 @@ class MainActivity : AppCompatActivity() {
         binding.root.postDelayed(progressTicker, PROGRESS_TICK_MS)
     }
 
-    private fun progressStage(remaining: Long): ProgressStage {
-        if (!progressAccepting) return ProgressStage(-1L)
-        val stage = ProgressStage(progressGeneration)
-        progressTotal = progressDone.get() + remaining
-        return stage
-    }
-
-    private fun signedPageWeight(highDpi: Boolean, scanEffect: Boolean, grayscale: Boolean): Int {
-        var weight = if (highDpi) 280.0 else 100.0
-        if (scanEffect) weight *= if (highDpi) 1.3 else 1.2
-        if (grayscale) weight *= if (highDpi) 1.15 else 1.1
-        return weight.roundToInt()
-    }
-
-    private fun layoutUnits(sourcePages: Int): Long {
-        val cfg = currentNupConfigFromInputs()
-        val per = (cfg.rows * cfg.cols).coerceAtLeast(1)
-        val outPages = (sourcePages + per - 1) / per
-        return sourcePages.toLong() + outPages + if (per == 1) sourcePages else 0
-    }
+    private fun progressStage(remaining: Long): PdfProgress = progressTracker.stage(remaining)
 
     private fun renderProgress(): Boolean {
         if (!::binding.isInitialized || isFinishing || isDestroyed) return false
@@ -4374,16 +4027,14 @@ class MainActivity : AppCompatActivity() {
         if (!linear && !binding.overlayProgressDialogUpdateUi.isVisible) return false
 
         val now = SystemClock.uptimeMillis()
-        if (now - progressStartedAt < PROGRESS_REVEAL_MS) return true
+        if (now - progressTracker.startedAt < ProgressNotifyPacing.REVEAL_MS) return true
 
-        val total = progressTotal
-        val done = min(progressDone.get(), total)
-        val idleSince = progressIdleSince
-        val measuring = total > 0 && done > 0 && (idleSince == 0L || now - idleSince < PROGRESS_IDLE_MS)
-        val percent = if (measuring) {
-            max(progressLastPercent, (done * 100 / total).toInt()).also { progressLastPercent = it }
+        val percent = if (operationOverlay) {
+            (PdfOperations.runner(this).state.value as? PdfOperationState.Running)?.percent
+                ?: PdfProcessingForegroundService.PROGRESS_INDETERMINATE
         } else {
-            PdfProcessingForegroundService.PROGRESS_INDETERMINATE
+            progressTracker.percent(now, PROGRESS_IDLE_MS)
+                ?: PdfProcessingForegroundService.PROGRESS_INDETERMINATE
         }
 
         val indicator: BaseProgressIndicator<*>?
@@ -4405,8 +4056,9 @@ class MainActivity : AppCompatActivity() {
             label?.visibility = if (linear) View.GONE else View.INVISIBLE
         }
 
-        if (percent != progressNotified &&
-            (percent < 0 || progressNotified < 0 || now - progressNotifiedAt >= PROGRESS_NOTIFY_MS)
+        if (!operationOverlay &&
+            (handoverId == null || PdfOperations.runner(this).isHolding) &&
+            ProgressNotifyPacing.waitMs(progressTracker.startedAt, progressNotified, progressNotifiedAt, percent, now) == 0L
         ) {
             progressNotified = percent
             progressNotifiedAt = now
@@ -4435,23 +4087,14 @@ class MainActivity : AppCompatActivity() {
         return (v ?: def).coerceIn(min, MAX_INPUT)
     }
 
-    private fun currentNupConfigFromInputs(): NupConfig {
+    private fun currentNupConfigFromInputs(isLand: Boolean = landscape.isChecked): NupConfig {
         val rows     = readIntOr(numberOfRows,    min = 1, def = 1)
         val cols     = readIntOr(numberOfColumns, min = 1, def = 1)
-        val isLand = landscape.isChecked
         val marginMm = min(readIntOr(margin, min = 0, def = 0), maxMarginMm(rows, cols, isLand))
         val drawFrame = drawFrameSwitch.isChecked
         val scaleInd = scaleSwitch.isChecked
         val fitInd = fitSwitch.isChecked
         return NupConfig(rows, cols, marginMm, isLand, drawFrame, scaleInd, fitInd)
-    }
-
-    private fun maxMarginMm(rows: Int, cols: Int, isLandscape: Boolean): Int {
-        val page = if (isLandscape) PageSize.A4.rotate() else PageSize.A4
-        val minCellPt = MIN_CELL_MM * 72f / 25.4f
-        val widthLimit = (page.width - cols * minCellPt) / (cols + 1)
-        val heightLimit = (page.height - rows * minCellPt) / (rows + 1)
-        return floor(min(widthLimit, heightLimit) * 25.4f / 72f).toInt().coerceAtLeast(0)
     }
 
     private fun nupConfigChanged(): Boolean {
@@ -4460,7 +4103,7 @@ class MainActivity : AppCompatActivity() {
         return last == null || last != cur
     }
 
-    private fun maybeRegeneratePlpOnSettingChange() {
+    private fun maybeRegeneratePlpOnSettingChange(isLandscape: Boolean = landscape.isChecked) {
         if (suppressNup) {
             return
         }
@@ -4470,7 +4113,7 @@ class MainActivity : AppCompatActivity() {
                 regenRequestedDuringProfileLoad = true
                 return
             }
-            regeneratePlpAsyncAndReloadThumbnails()
+            regeneratePlpAsyncAndReloadThumbnails(isLandscape)
         }
     }
 
@@ -4526,186 +4169,135 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handlePdfUri(uri: Uri) {
+        importPdfUris(listOf(uri), detectImages = true)
+    }
 
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdx = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val oldPer = run {
-            val last = lastBuiltNupConfig ?: currentNupConfigFromInputs()
-            (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
-        }
-
+    private fun importPdfUris(uris: List<Uri>, detectImages: Boolean) {
         val job = lifecycleScope.launch(Dispatchers.IO) {
+            val sources = ArrayList<PdfImportOperation.Source>()
             try {
-                val mtLc = try { contentResolver.getType(uri)?.lowercase(Locale.ROOT) } catch (_: Exception) { null }
-                val nameLcForType = try { extractFileName(uri).lowercase(Locale.ROOT) } catch (_: Exception) { "" }
-                val isImage = isSupportedImageMime(mtLc) || isSupportedImageFileName(nameLcForType)
-
-                val tempSrc = File(cacheDir, "${timeStamp}_${extractFileName(uri)}")
-                contentResolver.openInputStream(uri)?.use { inputStream ->
-                    FileOutputStream(tempSrc).use { outputStream ->
-                        val buffer = ByteArray(4096)
-                        var bytesRead: Int
-                        while (inputStream.read(buffer).also { bytesRead = it } > 0) {
-                            outputStream.write(buffer, 0, bytesRead)
-                        }
-                    }
-                } ?: throw IOException(getString(R.string.input_stream_is_null))
-
-                try {
-
-                    val oldPageCount = sourceTempPageCount()
-
-                    val selectedSrcPages: Set<Int> = if (selectedIdx.isNotEmpty() && oldPageCount > 0) {
-                        buildSet {
-                            selectedIdx.forEach { g ->
-                                val start = g * oldPer + 1
-                                val end = min(oldPageCount, start + oldPer - 1)
-                                for (p in start..end) add(p)
-                            }
-                        }
-                    } else emptySet()
-
-                    fun isBadPassword(t: Throwable): Boolean {
-                        if (t is BadPasswordException) return true
-                        val msg = t.message?.lowercase().orEmpty()
-                        return msg.contains("bad user password") || msg.contains("bad password")
-                    }
-
-                    if (isImage) {
-
-                        withContext(Dispatchers.Main) {
-                            showInProgress(getString(R.string.in_progress_opening))
-                            lockScreenOrientation()
-                        }
-
-                        val imagePdf = createTempPdfFromImageFile(tempSrc)
-                        try {
-                            appendPdfToSourceTemp(listOf(imagePdf), null)
-                        } finally {
-                            runCatching { imagePdf.delete() }.onFailure {
-
-                            }
-                        }
-                    } else {
-                        var passwordBytes: ByteArray? = null
-                        var attempt = 0
-                        var openFailure: Exception? = null
-
-                        while (true) {
-                            val canOpen = try {
-                                val (encrypted, pageCount) = PdfDocument(rdr(tempSrc.absolutePath, passwordBytes)).use {
-                                    it.reader.isEncrypted to it.numberOfPages
-                                }
-                                if (pageCount == 0) openFailure = IOException(getString(R.string.no_source_pages))
-                                !encrypted || !PdfMuPdfRepair.rejectsPassword(tempSrc, passwordBytes)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                if (isBadPassword(e)) {
-                                    false
-                                } else {
-                                    openFailure = e
-                                    true
-                                }
-                            }
-
-                            if (canOpen) break
-
-                            val entered: String? = withContext(Dispatchers.Main) {
-                                promptForPdfPassword(showError = (attempt > 0))
-                            }
-
-                            if (entered == null) {
-                                withContext(Dispatchers.Main) {
-                                    hideInProgressIfShown()
-                                    unlockScreenOrientation()
-                                }
-                                runCatching { tempSrc.delete() }
-                                return@launch
-                            }
-
-                            passwordBytes = entered.toByteArray(Charsets.UTF_8)
-                            attempt++
-                        }
-
-                        withContext(Dispatchers.Main) {
-                            showInProgress(getString(R.string.in_progress_opening))
-                            lockScreenOrientation()
-                        }
-
-                        appendPdfToSourceTempOrRepair(tempSrc, passwordBytes, openFailure) { ensureActive() }
-                    }
-
-                    runCatching { tempSrc.delete() }
-
-                    createTempPdfInternal()
-
-                    withContext(Dispatchers.Main) {
-                        resetThumbDocKey("handlePdfUri:$uri")
-
-                        val per = perGroup()
-                        val indicesToSelectAfter: Set<Int> =
-                            if (selectedSrcPages.isNotEmpty())
-                                selectedSrcPages.map { p -> (p - 1) / per }.toSet()
-                            else emptySet()
-
-                        val onReloadStarted: () -> Unit = {
-                            hideInProgressIfShown()
-                            unlockScreenOrientation()
-                        }
-
-                        reloadThumbnailsFromPlp(
-                            targetIndex = null,
-                            targetOffsetPx = 0,
-                            restorePrevious = true,
-                            indicesToSelect = indicesToSelectAfter,
-                            releaseUiAtStart = false,
-                            onStarted = onReloadStarted
-                        )
-
-                        updateButtonsState()
-                    }
-                } finally {
-                    runCatching { tempSrc.delete() }.onFailure {
-
-                    }
+                for ((index, uri) in uris.withIndex()) {
+                    prepareImport(uri, index, detectImages)?.let { sources += it }
                 }
             } catch (e: CancellationException) {
+                for (source in sources) runCatching { source.file.delete() }
                 throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.error_loading_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
+            }
+            if (sources.isEmpty()) return@launch
+
+            try {
+                withContext(Dispatchers.Main) { startImportWhenFree(sources) }
+            } catch (e: CancellationException) {
+                for (source in sources) runCatching { source.file.delete() }
+                throw e
             }
         }
         activeJobs.add(job)
         job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
-    private fun isSupportedImageMime(mtLc: String?): Boolean {
-        return when (mtLc) {
-            "image/jpeg", "image/jpg", "image/png" -> true
-            else -> false
+    private suspend fun startImportWhenFree(sources: List<PdfImportOperation.Source>) {
+        val runner = PdfOperations.runner(this)
+        while (true) {
+            runner.state.first { it is PdfOperationState.Idle }
+            val started = withStarted {
+                !isUiBlockedByProgress && runner.state.value is PdfOperationState.Idle && startImport(sources)
+            }
+            if (started) return
+            delay(PENDING_INTENT_RETRY_MS.milliseconds)
         }
     }
 
-    private fun isSupportedImageFileName(nameLc: String): Boolean {
-        return nameLc.endsWith(".jpg") ||
-                nameLc.endsWith(".jpeg") ||
-                nameLc.endsWith(".png")
+    private suspend fun prepareImport(uri: Uri, index: Int, detectImages: Boolean): PdfImportOperation.Source? {
+        val fileName = extractFileName(uri)
+        val tempSrc = File(cacheDir, "${timeStamp}_${index}_$fileName")
+        try {
+            val isImage = detectImages && run {
+                val mtLc = try { contentResolver.getType(uri)?.lowercase(Locale.ROOT) } catch (_: Exception) { null }
+                isSupportedImageMime(mtLc) || isSupportedImageFileName(fileName.lowercase(Locale.ROOT))
+            }
+
+            contentResolver.openInputStream(uri)?.use { inputStream ->
+                FileOutputStream(tempSrc).use { outputStream ->
+                    val buffer = ByteArray(4096)
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } > 0) {
+                        outputStream.write(buffer, 0, bytesRead)
+                    }
+                }
+            } ?: throw IOException(getString(R.string.input_stream_is_null))
+
+            if (isImage) return PdfImportOperation.Source(tempSrc, null, null, isImage = true)
+
+            var passwordBytes: ByteArray? = null
+            var attempt = 0
+            var openFailure: Exception? = null
+
+            while (true) {
+                val probe = PdfImportOperation.probe(tempSrc, passwordBytes)
+                if (probe.noPages) openFailure = IOException(getString(R.string.no_source_pages))
+                probe.failure?.let { openFailure = it }
+
+                if (probe.canOpen) break
+
+                val entered: String? = withContext(Dispatchers.Main) {
+                    promptForPdfPassword(fileName, showError = (attempt > 0))
+                }
+
+                if (entered == null) {
+                    runCatching { tempSrc.delete() }
+                    return null
+                }
+
+                passwordBytes = entered.toByteArray(Charsets.UTF_8)
+                attempt++
+            }
+
+            return PdfImportOperation.Source(tempSrc, passwordBytes, openFailure)
+        } catch (e: CancellationException) {
+            runCatching { tempSrc.delete() }
+            throw e
+        } catch (e: Exception) {
+            runCatching { tempSrc.delete() }
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@MainActivity, getString(R.string.error_loading_pdf_with_msg, e.message), Toast.LENGTH_LONG).show()
+            }
+            return null
+        }
+    }
+
+    private fun startImport(sources: List<PdfImportOperation.Source>): Boolean {
+        val selected = selectedPlpIndices()
+        val oldPer = run {
+            val last = lastBuiltNupConfig ?: currentNupConfigFromInputs()
+            (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
+        }
+
+        val operation = PdfImportOperation(
+            files = operationFiles(),
+            saveSelection = selectionSaver(selected),
+            input = PdfImportOperation.Input(
+                sources = sources,
+                oldPerGroup = oldPer,
+                config = currentNupConfigFromInputs(),
+                crops = sourceCrop,
+                rotation = sourceRotation.copyOf(),
+                position = sourcePosition.copyOf(),
+                defaultPosition = defaultPosition,
+                batchSize = batchValueOrDefault1(),
+                selected = selected
+            ),
+            progress = operationProgress(),
+            imageToPdf = ::createTempPdfFromImageFile,
+            warn = { warning, error -> Log.w("PdfMuPdfFitBounds", warning, error) }
+        )
+
+        return startOperation(
+            PdfOperationKind.IMPORT,
+            getString(R.string.in_progress_opening),
+            onCancelled = operation::restoreIfBackedUp,
+            work = operation::execute
+        )
     }
 
     @WorkerThread
@@ -4965,11 +4557,8 @@ class MainActivity : AppCompatActivity() {
         return et
     }
 
-    private suspend fun promptForPdfPassword(showError: Boolean = false): String? =
+    private suspend fun promptForPdfPassword(fileName: String, showError: Boolean = false): String? =
         suspendCancellableCoroutine { cont ->
-
-            PdfProcessingForegroundService.stop(this@MainActivity)
-            unlockScreenOrientation()
 
             applySoftInputModeForPasswordOverlay()
 
@@ -4997,6 +4586,10 @@ class MainActivity : AppCompatActivity() {
 
             (dialogView as? ViewGroup)?.let { vg ->
                 (vg.getChildAt(0) as? TextView)?.setText(R.string.enter_pdf_password)
+            }
+            dialogView.findViewById<TextView>(R.id.pwd_file_name)?.apply {
+                text = fileName
+                visibility = View.VISIBLE
             }
 
             val et = setupPasswordInputForDialog(
@@ -5076,24 +4669,9 @@ class MainActivity : AppCompatActivity() {
         return result ?: uri.lastPathSegment ?: getString(R.string.unknown_pdf)
     }
 
-    private fun writerProps(): WriterProperties =
-        WriterProperties()
-            .setFullCompressionMode(true)
-            .setCompressionLevel(CompressionConstants.BEST_SPEED)
+    private fun writerProps(): WriterProperties = PdfIo.writerProperties()
 
-    private fun rdr(path: String, password: ByteArray? = null): PdfReader =
-        PdfReader(
-            path,
-            ReaderProperties().apply {
-                if (password != null) {
-                    setPassword(password)
-                }
-            }
-        ).apply {
-            setMemorySavingMode(true)
-            isCloseStream = true
-            setUnethicalReading(true)
-        }
+    private fun rdr(path: String, password: ByteArray? = null): PdfReader = PdfIo.reader(path, password)
 
     private fun batchValueOrDefault1(): Int {
         val sNow = batchPage.text?.toString()?.trim().orEmpty()
@@ -5101,347 +4679,40 @@ class MainActivity : AppCompatActivity() {
         return if (v != null && v > 0) v else 1
     }
 
-    private fun appendPdfToSourceTemp(srcPdfs: List<File>, passwordBytes: ByteArray? = null) {
-
-        val outWork = sourceWorkFile()
-        if (outWork.exists()) outWork.delete()
-
-        val pageBatch = batchValueOrDefault1()
-
-        fun totalPagesOf(path: String, pw: ByteArray?): Int =
-            PdfDocument(rdr(path, pw)).use { it.numberOfPages }
-
-        val sourceTemp = sourceTempFile()
-        val inputs = buildList {
-            if (sourceTemp.exists()) add(sourceTemp.absolutePath to null)
-            for (srcPdf in srcPdfs) add(srcPdf.absolutePath to passwordBytes)
-        }.map { (path, pw) -> Triple(path, pw, totalPagesOf(path, pw)) }
-        val allPages = inputs.sumOf { it.third }
-        val progress = progressStage(allPages + layoutUnits(allPages))
-
-        PdfDocument(
-            PdfWriter(outWork.absolutePath, writerProps())
-        ).use { dest ->
-            dest.setFlushUnusedObjects(true)
-
-            fun copyInBatches(inputPath: String, pw: ByteArray?, total: Int) {
-                var from = 1
-                while (from <= total) {
-                    val to = min(from + pageBatch - 1, total)
-
-                    PdfDocument(rdr(inputPath, pw)).use { src ->
-                        src.copyPagesTo(from, to, dest, PdfVisibleAppearanceCopier(cacheDir))
-                        runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                    }
-
-                    val added = to - from + 1
-                    for (i in 0 until added) {
-                        val p = dest.numberOfPages - i
-                        if (p >= 1) runCatching { dest.getPage(p).flush() }
-                    }
-                    progress.advance(added)
-                    from = to + 1
-                }
-            }
-
-            for ((path, pw, total) in inputs) copyInBatches(path, pw, total)
-            progress.idle()
-        }
-
-        val target = sourceTempFile()
-        if (target.exists()) target.delete()
-        outWork.renameTo(target)
-
-        val newTotal = sourceTempPageCount()
-        if (sourceRotation.size < newTotal) {
-            val oldRotation = sourceRotation
-            sourceRotation = IntArray(newTotal)
-            oldRotation.copyInto(sourceRotation)
-        }
-        ensurePositionSize(newTotal)
-    }
-
-    private fun appendPdfToSourceTempOrRepair(
-        srcPdf: File,
-        passwordBytes: ByteArray?,
-        openFailure: Exception?,
-        ensureActive: () -> Unit
-    ) {
-        val doneBefore = progressDone.get()
-        val failure = openFailure ?: try {
-            appendPdfToSourceTemp(listOf(srcPdf), passwordBytes)
-            return
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            progressDone.set(doneBefore)
-            e
-        }
-
-        ensureActive()
-        val repaired = PdfMuPdfRepair.withRepairedParts(
-            input = srcPdf,
-            password = passwordBytes,
-            workDir = cacheDir,
-            batchSize = batchValueOrDefault1(),
-            ensureActive = ensureActive
-        ) { parts -> appendPdfToSourceTemp(parts, null) }
-        if (repaired) return
-
-        ensureActive()
-        val recovered = PdfRevisionRecovery.withEarlierRevision(
-            input = srcPdf,
-            workDir = cacheDir,
-            ensureActive = ensureActive,
-            isUsable = { revision ->
-                try {
-                    PdfDocument(rdr(revision.absolutePath, passwordBytes)).use { it.numberOfPages > 0 }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    false
-                }
-            }
-        ) { revision -> appendPdfToSourceTemp(listOf(revision), passwordBytes) }
-        if (!recovered) throw failure
-    }
-
     private fun addEmptyPageToSource() {
-        val count = sourceTempPageCount()
-        if (count <= 0) {
+        if (!sourceTempFile().exists()) {
             Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
             return
         }
 
-        showInProgress(getString(R.string.in_progress_adding_empty_page))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdx = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val oldPer = run {
-            val last = lastBuiltNupConfig ?: currentNupConfigFromInputs()
-            (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
-        }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val source = sourceTempFile()
-
-                val firstPageSize: PageSize = PdfDocument(rdr(source.absolutePath)).use { src ->
-                    val p = src.getPage(1).pageSize
-                    PageSize(p.width, p.height)
-                }
-
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
-
-                val oldPageCount = sourceTempPageCount()
-
-                val selectedSrcPages: Set<Int> = if (selectedIdx.isNotEmpty() && oldPageCount > 0) {
-                    buildSet {
-                        selectedIdx.forEach { g ->
-                            val start = g * oldPer + 1
-                            val end = min(oldPageCount, start + oldPer - 1)
-                            for (p in start..end) add(p)
-                        }
-                    }
-                } else emptySet()
-
-                val progress = progressStage(oldPageCount + layoutUnits(oldPageCount + 1))
-
-                PdfDocument(PdfWriter(outWork.absolutePath, writerProps())).use { dest ->
-                    dest.setFlushUnusedObjects(true)
-
-                    val pageBatch = batchValueOrDefault1()
-
-                    fun copyRange1BasedPaged(from1: Int, to1: Int) {
-                        var from = from1
-                        while (from <= to1) {
-                            val to = min(from + pageBatch - 1, to1)
-
-                            PdfDocument(rdr(source.absolutePath)).use { src ->
-                                src.copyPagesTo(from, to, dest)
-                                runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                            }
-
-                            val added = to - from + 1
-                            for (i in 0 until added) {
-                                val p = dest.numberOfPages - i
-                                if (p >= 1) runCatching { dest.getPage(p).flush() }
-                            }
-                            progress.advance(added)
-
-                            from = to + 1
-                        }
-                    }
-
-                    if (oldPageCount > 0) copyRange1BasedPaged(1, oldPageCount)
-
-                    val newPage = dest.addNewPage(firstPageSize)
-                    runCatching { newPage.flush() }
-                    progress.idle()
-                }
-
-                val target = sourceTempFile()
-                if (target.exists()) target.delete()
-                outWork.renameTo(target)
-
-                val newTotal = oldPageCount + 1
-                if (sourceRotation.size < newTotal) {
-                    val oldRotation = sourceRotation
-                    sourceRotation = IntArray(newTotal)
-                    oldRotation.copyInto(sourceRotation)
-                }
-                ensurePositionSize(newTotal)
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("addEmptyPageToSource")
-
-                    val per = perGroup()
-                    val indicesToSelectAfter: Set<Int> =
-                        if (selectedSrcPages.isNotEmpty())
-                            selectedSrcPages.map { p -> (p - 1) / per }.toSet()
-                        else emptySet()
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = indicesToSelectAfter,
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_add_empty_page_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        startLayoutChange(
+            PdfOperationKind.EMPTY_PAGE,
+            getString(R.string.in_progress_adding_empty_page),
+            PdfLayoutChangeOperation.Change.AddEmptyPage
+        )
     }
 
-    private suspend fun createTempPdfInternal() = withContext(Dispatchers.IO) {
-        val final = plpTempFile()
-        val work  = File(cacheDir, "${PLP_TEMP_NAME}.part")
+    private fun regeneratePlpAsyncAndReloadThumbnails(
+        isLandscape: Boolean = landscape.isChecked,
+        profilePosition: Int? = null
+    ): Boolean {
+        if (suppressNup) return false
 
-        if (work.exists()) work.delete()
-        createNupPdf(work)
-
-        if (final.exists()) final.delete()
-        work.renameTo(final)
-
-        lastBuiltNupConfig = currentNupConfigFromInputs()
-    }
-
-    private fun regeneratePlpAsyncAndReloadThumbnails() {
-        if (suppressNup) return
-
-        if (isPlpRebuilding) return
+        if (isPlpRebuilding) return false
         isPlpRebuilding = true
 
-        showInProgress(getString(R.string.in_progress_page_layout))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdx = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val totalSrcPages = sourceTempPageCount()
-
         val oldPer = run {
             val last = lastBuiltNupConfig ?: currentNupConfigFromInputs()
             (last.rows.coerceAtLeast(1)) * (last.cols.coerceAtLeast(1))
         }
 
-        val newPer = run {
-            val cur = currentNupConfigFromInputs()
-            (cur.rows.coerceAtLeast(1)) * (cur.cols.coerceAtLeast(1))
-        }
-
-        val applySelection = !clearSelectionOnNextRebuild
-
-        val indicesToSelectAfter: Set<Int> =
-            if (applySelection && selectedIdx.isNotEmpty() && totalSrcPages > 0) {
-                val selectedPages = mutableSetOf<Int>()
-                selectedIdx.forEach { g ->
-                    val start = g * oldPer + 1
-                    val end = min(totalSrcPages, start + oldPer - 1)
-                    for (p in start..end) selectedPages.add(p)
-                }
-                selectedPages.map { p -> (p - 1) / newPer }.toSet()
-            } else emptySet()
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                createTempPdfInternal()
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("regeneratePlp")
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = indicesToSelectAfter,
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_build_pages_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    isPlpRebuilding = false
-                    clearSelectionOnNextRebuild = false
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        return startLayoutChange(
+            PdfOperationKind.LAYOUT,
+            getString(R.string.in_progress_page_layout),
+            PdfLayoutChangeOperation.Change.Rebuild(oldPer, resetPositions = profilePosition != null),
+            newDefaultPosition = profilePosition ?: defaultPosition,
+            config = currentNupConfigFromInputs(isLandscape)
+        )
     }
 
     private fun clearThumbnails() {
@@ -5461,7 +4732,8 @@ class MainActivity : AppCompatActivity() {
         restorePrevious: Boolean = true,
         indicesToSelect: Set<Int>? = null,
         releaseUiAtStart: Boolean = false,
-        onStarted: (() -> Unit)? = null
+        onStarted: (() -> Unit)? = null,
+        pageSizes: PageSizes? = null
     ) {
         val myGen = ++reloadThumbnailsGeneration
 
@@ -5580,21 +4852,9 @@ class MainActivity : AppCompatActivity() {
                     val list = ArrayList<PageItem>(plpPages)
 
                     val cfg = mappingConfig()
-                    val rows = max(1, min(100, cfg.rows))
-                    val cols = max(1, min(100, cfg.cols))
-                    val isLandscape = cfg.isLandscape
-                    val basePs = if (isLandscape) PageSize.A4.rotate() else PageSize.A4
-                    val isSingleUp = (rows * cols) == 1
+                    val (fallbackW, fallbackH) = PdfPageSizes.fallback(cfg)
 
-                    val psForPlpPageFallback = if (isSingleUp) {
-                        if (!isLandscape) PageSize.A4 else basePs
-                    } else {
-                        basePs
-                    }
-                    val fallbackW = psForPlpPageFallback.width
-                    val fallbackH = psForPlpPageFallback.height
-
-                    val skipReadingAnyPdfSize = (rows > 1 || cols > 1)
+                    val skipReadingAnyPdfSize = !PdfPageSizes.isNeeded(cfg)
 
                     if (skipReadingAnyPdfSize) {
                         for (g in 0 until plpPages) {
@@ -5617,44 +4877,17 @@ class MainActivity : AppCompatActivity() {
                             )
                         }
                     } else {
-                        val batchSize = batchValueOrDefault1()
-
-                        val widths  = FloatArray(totalSrcPages) { fallbackW }
-                        val heights = FloatArray(totalSrcPages) { fallbackH }
-                        val progress = progressStage(totalSrcPages.toLong())
-
-                        var startPage = 0
-                        while (startPage < totalSrcPages) {
-                            val endExclusive = min(totalSrcPages, startPage + batchSize)
-
-                            val reader = PdfReader(srcFile.absolutePath)
-                            val pdfDoc = PdfDocument(reader)
-                            try {
-                                val srcPageCount = pdfDoc.numberOfPages
-                                val lastPageToRead = min(endExclusive, srcPageCount)
-
-                                for (pageZeroBased in startPage until lastPageToRead) {
-                                    val pageIndex1Based = pageZeroBased + 1
-                                    runCatching {
-                                        val page = pdfDoc.getPage(pageIndex1Based)
-
-                                        val box = page.cropBox ?: page.mediaBox
-                                        val w = box.width
-                                        val h = box.height
-
-                                        widths[pageZeroBased] = w
-                                        heights[pageZeroBased] = h
-                                    }.onFailure {
-                                    }
-                                }
-                            } finally {
-                                runCatching { pdfDoc.close() }
-                            }
-
-                            progress.advance(endExclusive - startPage)
-                            startPage = endExclusive
-                        }
-                        progress.idle()
+                        val sizes = pageSizes?.takeIf { it.widths.size == totalSrcPages }
+                            ?: PdfPageSizes.read(
+                                srcFile,
+                                totalSrcPages,
+                                batchValueOrDefault1(),
+                                fallbackW,
+                                fallbackH,
+                                progressStage(totalSrcPages.toLong())
+                            )
+                        val widths = sizes.widths
+                        val heights = sizes.heights
 
                         for (g in 0 until plpPages) {
                             val pageNumberText = if (per == 1) {
@@ -5890,158 +5123,16 @@ class MainActivity : AppCompatActivity() {
     private fun persistPlpOrderToSourceTemp() {
         if (viewModel.pageItems.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_reordering))
-        lockScreenOrientation()
-
-        val selectedIdx = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val ordered = viewModel.pageItems.toList()
-        val per = perGroup()
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val srcFile = sourceTempFile()
-                if (!srcFile.exists()) {
-                    withContext(Dispatchers.Main) {
-                        hideInProgressIfShown()
-                    }
-                    return@launch
-                }
-
-                val totalSrcPages = sourceTempPageCount()
-                val progress = progressStage(totalSrcPages + layoutUnits(totalSrcPages))
-
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
-
-                PdfDocument(PdfWriter(outWork.absolutePath, writerProps())).use { dest ->
-                    dest.setFlushUnusedObjects(true)
-
-                    val pageBatch = batchValueOrDefault1()
-
-                    fun copyRange1BasedPaged(from1: Int, to1: Int) {
-                        var from = from1
-                        while (from <= to1) {
-                            val to = min(from + pageBatch - 1, to1)
-                            PdfDocument(rdr(srcFile.absolutePath)).use { src ->
-                                src.copyPagesTo(from, to, dest)
-                                runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                            }
-                            val added = to - from + 1
-                            for (i in 0 until added) {
-                                val p = dest.numberOfPages - i
-                                if (p >= 1) runCatching { dest.getPage(p).flush() }
-                            }
-                            progress.advance(added)
-                            from = to + 1
-                        }
-                    }
-
-                    var runStartGroup: Int? = null
-                    var runEndGroup: Int? = null
-
-                    fun flushRunIfAny() {
-                        val rs = runStartGroup
-                        val re = runEndGroup
-                        if (rs != null && re != null) {
-                            val firstStart0 = rs * per
-                            val lastEnd0 = min(totalSrcPages - 1, re * per + (per - 1))
-                            if (firstStart0 <= lastEnd0) {
-                                val from1 = firstStart0 + 1
-                                val to1   = lastEnd0 + 1
-                                copyRange1BasedPaged(from1, to1)
-                            }
-                        }
-                        runStartGroup = null
-                        runEndGroup = null
-                    }
-
-                    for (item in ordered) {
-                        val gi = item.pageIndex
-                        if (runStartGroup == null) {
-                            runStartGroup = gi
-                            runEndGroup = gi
-                        } else if (gi == (runEndGroup!! + 1)) {
-                            runEndGroup = gi
-                        } else {
-                            flushRunIfAny()
-                            runStartGroup = gi
-                            runEndGroup = gi
-                        }
-                    }
-                    flushRunIfAny()
-                    progress.idle()
-                }
-
-                if (srcFile.exists()) srcFile.delete()
-                outWork.renameTo(srcFile)
-
-                val newRotation = IntArray(totalSrcPages)
-                val newPosition = IntArray(totalSrcPages) { DEFAULT_POSITION }
-                val newToOld = IntArray(totalSrcPages) { -1 }
-                var destIndex = 0
-                val oldRotation = sourceRotation.copyOf()
-                val oldPosition = sourcePosition.copyOf()
-                ordered.forEach { item ->
-                    val originalPlpIndex = item.pageIndex
-                    val start = originalPlpIndex * per
-                    val end = min(totalSrcPages - 1, start + per - 1)
-                    if (start < totalSrcPages) {
-                        for (i in start..end) {
-                            if (destIndex < newRotation.size) {
-                                newPosition[destIndex] = validPosition(oldPosition.getOrElse(i) { defaultPosition })
-                                newToOld[destIndex] = i
-                                newRotation[destIndex++] = oldRotation.getOrElse(i) { 0 }
-                            }
-                        }
-                    }
-                }
-                sourceRotation = newRotation
-                sourcePosition = newPosition
-                sourceCrop = PdfCrops.afterReorder(sourceCrop, newToOld)
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("reorder")
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = selectedIdx.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.reorder_failed_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        startLayoutChange(
+            PdfOperationKind.REORDER,
+            getString(R.string.in_progress_reordering),
+            PdfLayoutChangeOperation.Change.Reorder(viewModel.pageItems.map { it.pageIndex }),
+            savesSelection = false
+        )
     }
 
     private fun rotateLeftPlpPageGroupAndMirrorSource(plpIndex: Int) {
-        updateRotationForPlpIndices(listOf(plpIndex), "rotateGroup:$plpIndex")
+        updateRotationForPlpIndices(listOf(plpIndex))
     }
 
     private fun rotateLeftSelectedPlpGroups() {        val selectedIdx = viewModel.pageItems
@@ -6050,80 +5141,15 @@ class MainActivity : AppCompatActivity() {
 
         if (selectedIdx.isEmpty()) return
 
-        updateRotationForPlpIndices(selectedIdx, "rotateSelected")
+        updateRotationForPlpIndices(selectedIdx)
     }
 
-    private fun updateRotationForPlpIndices(plpIndices: List<Int>, resetKey: String) {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-
-        showInProgress(getString(R.string.in_progress_rotation))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val per = perGroup()
-                if (sourceRotation.size != total) {
-                    sourceRotation = IntArray(total)
-                }
-
-                for (plpIndex in plpIndices) {
-                    val groupStart = plpIndex * per
-                    val groupEnd = min(total - 1, groupStart + per - 1)
-                    if (groupStart <= groupEnd) {
-                        for (i in groupStart..groupEnd) {
-                            sourceRotation[i] = (sourceRotation[i] + 1) % 4
-                        }
-                    }
-                }
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey(resetKey)
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = selectedIdxBefore.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_rotate_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+    private fun updateRotationForPlpIndices(plpIndices: List<Int>) {
+        startLayoutChange(
+            PdfOperationKind.ROTATION,
+            getString(R.string.in_progress_rotation),
+            PdfLayoutChangeOperation.Change.Rotate(plpIndices)
+        )
     }
 
     private val positionIcons = intArrayOf(
@@ -6138,18 +5164,6 @@ class MainActivity : AppCompatActivity() {
         R.drawable.ic_position_08_24,
         R.drawable.ic_position_09_24
     )
-
-    private fun validPosition(position: Int): Int = if (position in 1..9) position else DEFAULT_POSITION
-
-    private fun horizontalPositionFactor(position: Int): Float = ((position - 1) % 3) * 0.5f
-
-    private fun verticalPositionFactor(position: Int): Float = (2 - (position - 1) / 3) * 0.5f
-
-    private fun ensurePositionSize(total: Int) {
-        if (sourcePosition.size == total) return
-        val old = sourcePosition
-        sourcePosition = IntArray(total) { index -> validPosition(old.getOrElse(index) { defaultPosition }) }
-    }
 
     private fun positionsOfPlpIndices(plpIndices: List<Int>): Set<Int> {
         if (plpIndices.isEmpty()) return emptySet()
@@ -6222,80 +5236,17 @@ class MainActivity : AppCompatActivity() {
         btnOk.setOnClickListener {
             val target = selected ?: return@setOnClickListener
             close()
-            updatePositionForPlpIndices(plpIndices, target, "position:$target")
-            if (fromMainWindow) defaultPosition = target
+            updatePositionForPlpIndices(plpIndices, target, if (fromMainWindow) target else defaultPosition)
         }
     }
 
-    private fun updatePositionForPlpIndices(plpIndices: List<Int>, position: Int, resetKey: String) {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-
-        showInProgress(getString(R.string.in_progress_position))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val per = perGroup()
-                ensurePositionSize(total)
-
-                for (plpIndex in plpIndices) {
-                    val groupStart = plpIndex * per
-                    val groupEnd = min(total - 1, groupStart + per - 1)
-                    if (groupStart <= groupEnd) {
-                        for (i in groupStart..groupEnd) {
-                            sourcePosition[i] = position
-                        }
-                    }
-                }
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey(resetKey)
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = selectedIdxBefore.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_position_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+    private fun updatePositionForPlpIndices(plpIndices: List<Int>, position: Int, newDefaultPosition: Int) {
+        startLayoutChange(
+            PdfOperationKind.POSITION,
+            getString(R.string.in_progress_position),
+            PdfLayoutChangeOperation.Change.Position(plpIndices, position),
+            newDefaultPosition
+        )
     }
 
     private fun isPlpGroupCropped(plpIndex: Int): Boolean {
@@ -6417,415 +5368,322 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateCropForPlpGroup(plpIndex: Int, crop: PdfCropRect?, applyToAll: Boolean) {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-
-        showInProgress(getString(R.string.in_progress_crop))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val per = perGroup()
-                val groupStart = plpIndex * per
-                val indices = if (applyToAll) 0 until total else groupStart until min(total, groupStart + per)
-                sourceCrop = PdfCrops.withCrop(sourceCrop.filterKeys { it < total }, indices, crop)
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("crop")
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = selectedIdxBefore.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_crop_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        startLayoutChange(
+            PdfOperationKind.CROP,
+            getString(R.string.in_progress_crop),
+            PdfLayoutChangeOperation.Change.Crop(plpIndex, crop, applyToAll)
+        )
     }
 
-    private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-        val per = perGroup()
+    private fun startLayoutChange(
+        kind: PdfOperationKind,
+        message: String,
+        change: PdfLayoutChangeOperation.Change,
+        newDefaultPosition: Int = defaultPosition,
+        config: NupConfig = currentNupConfigFromInputs(),
+        savesSelection: Boolean = true
+    ): Boolean {
+        if (change !is PdfLayoutChangeOperation.Change.Rebuild && !sourceTempFile().exists()) return false
 
-        showInProgress(getString(R.string.in_progress_delete))
+        val selectedIdxBefore = selectedPlpIndices()
+        val saveSelection = selectionSaver(selectedIdxBefore)
+
+        val operation = PdfLayoutChangeOperation(
+            files = operationFiles(),
+            saveSelection = { if (savesSelection) saveSelection() },
+            input = PdfLayoutChangeOperation.Input(
+                change = change,
+                perGroup = perGroup(),
+                config = config,
+                crops = sourceCrop,
+                rotation = sourceRotation.copyOf(),
+                position = sourcePosition.copyOf(),
+                defaultPosition = newDefaultPosition,
+                batchSize = batchValueOrDefault1(),
+                selected = selectedIdxBefore
+            ),
+            progress = operationProgress(),
+            warn = { warning, error -> Log.w("PdfMuPdfFitBounds", warning, error) }
+        )
+
+        return startOperation(
+            kind,
+            message,
+            onCancelled = operation::restoreIfBackedUp,
+            work = operation::execute
+        )
+    }
+
+    private fun selectedPlpIndices(): List<Int> =
+        viewModel.pageItems.mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+
+    private fun selectionSaver(selected: List<Int>): () -> Unit {
+        val lm = binding.rvThumbnails.layoutManager as? LinearLayoutManager
+        val firstPos = lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+        val topOffset = if (firstPos != RecyclerView.NO_POSITION) {
+            lm?.findViewByPosition(firstPos)?.top ?: 0
+        } else 0
+
+        val stateBackup = longOperationStateBackup()
+        val selectedCsv = selected.joinToString(",")
+        return { stateBackup.saveSelection(selectedCsv, firstPos, topOffset) }
+    }
+
+    private fun operationFiles(): PdfLayoutChangeOperation.Files =
+        PdfLayoutChangeOperation.Files(cacheDir, sourceTempFile(), plpTempFile(), workFileBackup(), sourceWorkFile())
+
+    private fun operationProgress(): PdfLayoutChangeOperation.Progress =
+        PdfLayoutChangeOperation.Progress(SystemClock::uptimeMillis, PROGRESS_TICK_MS, PROGRESS_IDLE_MS)
+
+    private fun startOperation(
+        kind: PdfOperationKind,
+        message: String,
+        onCancelled: suspend () -> Unit,
+        work: suspend (report: (percent: Int?) -> Unit) -> PdfOperationResult?
+    ): Boolean {
+        showInProgress(message, forOperation = true)
         lockScreenOrientation()
+        if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
+        val id = PdfOperations.runner(this).start(kind, message, onCancelled, work)
+        if (id == null) {
+            isPlpRebuilding = false
+            operationOverlay = false
+            if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
+            hideInProgressIfShown()
+            unlockScreenOrientation()
+            return false
         }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
+        operationId = id
+        return true
+    }
 
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
+    private fun observeOperations() {
+        val runner = PdfOperations.runner(this)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                runner.state.collect { state -> onOperationState(runner, state) }
+            }
+        }
+    }
 
-        val toReselectAfter: List<Int> = selectedIdxBefore
-            .filter { it != plpIndex }
-            .map { if (it > plpIndex) it - 1 else it }
+    private fun onOperationState(runner: PdfOperationRunner, state: PdfOperationState) {
+        when (val step = PdfOperationScreen.step(state, operationId, operationOverlay, discardOperation, handoverId)) {
+            PdfOperationScreen.Step.Ignore -> Unit
+            is PdfOperationScreen.Step.Adopt -> operationId = step.id
+            is PdfOperationScreen.Step.Attach -> {
+                operationId = step.id
+                attachOperation(step.message, step.updateUi)
+            }
+            is PdfOperationScreen.Step.Ended -> endOperation(runner, step, state.request?.kind)
+        }
+    }
 
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val source = sourceTempFile()
+    private fun endOperation(runner: PdfOperationRunner, step: PdfOperationScreen.Step.Ended, kind: PdfOperationKind?) {
+        val restore = operationRestore
+        operationRestore = null
+        operationId = null
+        operationOverlay = false
+        isPlpRebuilding = false
+        if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
 
-                val totalBefore = sourceTempPageCount()
-                if (sourceRotation.size != totalBefore) {
-                    sourceRotation = IntArray(totalBefore)
-                }
-                ensurePositionSize(totalBefore)
+        when (step) {
+            is PdfOperationScreen.Step.Finish -> {
+                val result = step.result as? PdfLayoutChangeOperation.Result
+                if (result == null || result.cleared) runner.acknowledge(step.id) else handOver(runner, step.id)
+                finishLayoutChange(result, restore, kind)
+            }
+            is PdfOperationScreen.Step.Fail -> {
+                runner.acknowledge(step.id)
+                failLayoutChange(step.error, restore, kind)
+            }
+            is PdfOperationScreen.Step.Restore -> {
+                handOver(runner, step.id)
+                restoreCancelledOperation(kind)
+            }
+            is PdfOperationScreen.Step.Discarded -> {
+                runner.acknowledge(step.id)
+                discardOperation = false
+                clearCacheDir()
+                hideInProgressIfShownUpdateUI()
+                unlockScreenOrientation()
+                updateButtonsState()
+            }
+        }
+    }
 
-                val groupStart = plpIndex * per
-                val groupEnd = min(total - 1, groupStart + per - 1)
-                val toSkipCount = if (groupStart <= groupEnd) (groupEnd - groupStart + 1) else 0
-                val remaining = total - toSkipCount
-                val progress = progressStage(remaining + layoutUnits(remaining))
+    private fun handOver(runner: PdfOperationRunner, id: Long) {
+        handoverId = id
+        runner.handOver(id)
+    }
 
-                if (remaining <= 0) {
-                    clearCacheDir()
-                    sourceRotation = IntArray(0)
-                    sourcePosition = IntArray(0)
-                    sourceCrop = emptyMap()
+    private fun finishHandover() {
+        val id = handoverId ?: return
+        handoverId = null
+        PdfOperations.runner(this).acknowledge(id)
+    }
 
-                    withContext(Dispatchers.Main) {
-                        clearThumbnails()
-                        updateButtonsState()
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-                    return@launch
-                }
+    private fun attachOperation(message: String, updateUi: Boolean) {
+        operationOverlay = true
+        if (updateUi) {
+            showInProgressUpdateUI()
+        } else {
+            showInProgress(message, forOperation = true)
+        }
+        lockScreenOrientation()
+        if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
+    }
 
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
+    private fun finishLayoutChange(result: PdfLayoutChangeOperation.Result?, restore: ThumbRestore?, kind: PdfOperationKind?) {
+        if (result == null) {
+            if (kind == PdfOperationKind.EMPTY_PAGE) {
+                Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
+            }
+            hideInProgressIfShown()
+            unlockScreenOrientation()
+            restore?.let { reloadAfterOperation(it) }
+            return
+        }
 
-                val pageBatch = batchValueOrDefault1()
+        if (result.cleared) {
+            clearCacheDir()
+            sourceRotation = IntArray(0)
+            sourcePosition = IntArray(0)
+            sourceCrop = emptyMap()
 
-                fun copyRange1BasedPaged(from1: Int, to1: Int, dest: PdfDocument, srcPath: String) {
-                    var from = from1
-                    while (from <= to1) {
-                        val to = min(from + pageBatch - 1, to1)
-                        PdfDocument(rdr(srcPath)).use { src ->
-                            src.copyPagesTo(from, to, dest)
-                            runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                        }
-                        val added = to - from + 1
-                        for (i in 0 until added) {
-                            val p = dest.numberOfPages - i
-                            if (p >= 1) runCatching { dest.getPage(p).flush() }
-                        }
-                        progress.advance(added)
-                        from = to + 1
-                    }
-                }
+            clearThumbnails()
+            updateButtonsState()
+            hideInProgressIfShown()
+            unlockScreenOrientation()
+            return
+        }
 
-                PdfDocument(PdfWriter(outWork.absolutePath, writerProps())).use { dest ->
-                    dest.setFlushUnusedObjects(true)
+        sourceCrop = result.crops
+        sourceRotation = result.rotation
+        sourcePosition = result.position
+        defaultPosition = result.defaultPosition
+        lastBuiltNupConfig = result.config
+        progressTracker.continueFrom(result.progress)
 
-                    var runStart: Int? = null
-                    var currentRunEnd = -1
+        resetThumbDocKey("layoutChange:$kind")
 
-                    fun flushRun(rs0: Int, re0: Int) {
-                        if (rs0 <= re0) {
-                            val from1 = rs0 + 1
-                            val to1   = re0 + 1
-                            copyRange1BasedPaged(from1, to1, dest, source.absolutePath)
-                        }
-                    }
+        if (kind == PdfOperationKind.SIGN) {
+            currentSigFile = null
+            updateSignatureInputFilters()
+        }
 
-                    for (pZero in 0 until total) {
-                        if (pZero in groupStart..groupEnd) {
-                            runStart?.let { flushRun(it, currentRunEnd) }
-                            runStart = null
-                            continue
-                        }
-                        if (runStart == null) {
-                            runStart = pZero
-                            currentRunEnd = pZero
-                        } else if (pZero == currentRunEnd + 1) {
-                            currentRunEnd = pZero
-                        } else {
-                            flushRun(runStart, currentRunEnd)
-                            runStart = pZero
-                            currentRunEnd = pZero
-                        }
-                    }
-                    runStart?.let { flushRun(it, currentRunEnd) }
-                    progress.idle()
-                }
-
-                if (source.exists()) source.delete()
-                outWork.renameTo(source)
-
-                val newRotationList = sourceRotation.toMutableList()
-                val newPositionList = sourcePosition.toMutableList()
-                val groupStartIdx = plpIndex * per
-                val groupEndIdx = min(totalBefore - 1, groupStartIdx + per - 1)
-                if (groupStartIdx <= groupEndIdx) {
-                    for (i in groupEndIdx downTo groupStartIdx) {
-                        if (i < newRotationList.size) {
-                            newRotationList.removeAt(i)
-                        }
-                        if (i < newPositionList.size) {
-                            newPositionList.removeAt(i)
-                        }
-                    }
-                }
-                sourceRotation = newRotationList.toIntArray()
-                sourcePosition = newPositionList.toIntArray()
-                if (groupStartIdx <= groupEndIdx) {
-                    sourceCrop = PdfCrops.afterRemoval(sourceCrop, (groupStartIdx..groupEndIdx).toSet())
-                }
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("deleteGroup:$plpIndex")
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = toReselectAfter.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_delete_page_group_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
+        if (kind == PdfOperationKind.DELETE_SELECTED) {
+            for (i in viewModel.pageItems.indices.reversed()) {
+                if (viewModel.pageItems[i].isSelected) {
+                    val removed = viewModel.pageItems.removeAt(i)
+                    removed.thumbnail = null
+                    adapter.notifyItemRemoved(i)
                 }
             }
         }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+
+        val onReloadStarted: () -> Unit = {
+            hideInProgressIfShown()
+            unlockScreenOrientation()
+            finishHandover()
+        }
+
+        reloadThumbnailsFromPlp(
+            targetIndex = restore?.targetIndex,
+            targetOffsetPx = restore?.offsetPx ?: 0,
+            restorePrevious = true,
+            indicesToSelect = if (kind == PdfOperationKind.DELETE_SELECTED || kind == PdfOperationKind.SIGN) null else result.selected.toSet(),
+            releaseUiAtStart = false,
+            onStarted = onReloadStarted,
+            pageSizes = result.pageSizes
+        )
+
+        updateButtonsState()
+        unlockScreenOrientation()
+    }
+
+    private fun failLayoutChange(error: Throwable, restore: ThumbRestore?, kind: PdfOperationKind?) {
+        val messageRes = when (kind) {
+            PdfOperationKind.ROTATION -> R.string.failed_to_rotate_selected_groups_with_msg
+            PdfOperationKind.POSITION -> R.string.failed_to_position_selected_groups_with_msg
+            PdfOperationKind.LAYOUT -> R.string.failed_to_build_pages_with_msg
+            PdfOperationKind.DELETE_GROUP -> R.string.failed_to_delete_page_group_with_msg
+            PdfOperationKind.DELETE_SELECTED -> R.string.failed_to_delete_selected_groups_with_msg
+            PdfOperationKind.EMPTY_PAGE -> R.string.failed_to_add_empty_page_with_msg
+            PdfOperationKind.REORDER -> R.string.reorder_failed_with_msg
+            PdfOperationKind.IMPORT -> R.string.error_loading_pdf_with_msg
+            PdfOperationKind.VIEWER_EDIT -> R.string.pdf_edits_save_failed
+            PdfOperationKind.SIGN -> R.string.signing_failed_with_msg
+            PdfOperationKind.CROP, null -> R.string.failed_to_crop_selected_groups_with_msg
+        }
+        Toast.makeText(this, getString(messageRes, error.message), Toast.LENGTH_LONG).show()
+        if (kind.rewritesSource) {
+            restoreCancelledOperation(kind)
+            return
+        }
+        hideInProgressIfShown()
+        unlockScreenOrientation()
+        restore?.let { reloadAfterOperation(it) }
+    }
+
+    private fun restoreCancelledOperation(kind: PdfOperationKind?) {
+        if (!binding.overlayProgressDialogUpdateUi.isVisible) {
+            hideInProgressIfShown()
+            showInProgressUpdateUI()
+        }
+
+        isSigningCancelled = true
+        progressTracker.cancel()
+        reloadThumbnailsGeneration++
+        isPlpRebuilding = false
+        isLoadingSettingsProfile = false
+
+        lifecycleScope.launch {
+            restoreAfterCancel { kind == PdfOperationKind.LAYOUT }
+        }
+    }
+
+    private fun reloadAfterOperation(restore: ThumbRestore) {
+        reloadThumbnailsFromPlp(
+            targetIndex = restore.targetIndex,
+            targetOffsetPx = restore.offsetPx,
+            restorePrevious = false,
+            indicesToSelect = restore.selected,
+            releaseUiAtStart = false
+        )
+    }
+
+    private val PdfOperationKind?.rewritesSource: Boolean
+        get() = this == PdfOperationKind.DELETE_GROUP || this == PdfOperationKind.DELETE_SELECTED ||
+            this == PdfOperationKind.EMPTY_PAGE || this == PdfOperationKind.REORDER || this == PdfOperationKind.SIGN
+
+    private fun deletePlpPageGroupAndMirrorSource(plpIndex: Int) {
+        startLayoutChange(
+            PdfOperationKind.DELETE_GROUP,
+            getString(R.string.in_progress_delete),
+            PdfLayoutChangeOperation.Change.DeleteGroups(listOf(plpIndex))
+        )
     }
 
     private fun deleteSelectedPlpGroups() {
-        val total = sourceTempPageCount()
-        if (total <= 0) return
-
         val selectedPlp = viewModel.pageItems
             .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
             .sorted()
 
         if (selectedPlp.isEmpty()) return
 
-        showInProgress(getString(R.string.in_progress_delete))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val per = perGroup()
-                val source = sourceTempFile()
-
-                val totalBefore = sourceTempPageCount()
-                if (sourceRotation.size != totalBefore) {
-                    sourceRotation = IntArray(totalBefore)
-                }
-                ensurePositionSize(totalBefore)
-
-                val toSkip = HashSet<Int>().apply {
-                    for (pi in selectedPlp) {
-                        val start = pi * per
-                        val end = min(total - 1, start + per - 1)
-                        for (i in start..end) add(i)
-                    }
-                }
-
-                val remaining = total - toSkip.size
-                val progress = progressStage(remaining + layoutUnits(remaining))
-                if (remaining <= 0) {
-                    clearCacheDir()
-                    sourceRotation = IntArray(0)
-                    sourcePosition = IntArray(0)
-                    sourceCrop = emptyMap()
-
-                    withContext(Dispatchers.Main) {
-                        clearThumbnails()
-                        updateButtonsState()
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-                    return@launch
-                }
-
-                val outWork = sourceWorkFile()
-                if (outWork.exists()) outWork.delete()
-
-                val pageBatch = batchValueOrDefault1()
-
-                fun copyRange1BasedPaged(from1: Int, to1: Int, dest: PdfDocument, srcPath: String) {
-                    var from = from1
-                    while (from <= to1) {
-                        val to = min(from + pageBatch - 1, to1)
-                        PdfDocument(rdr(srcPath)).use { src ->
-                            src.copyPagesTo(from, to, dest)
-                            runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                        }
-                        val added = to - from + 1
-                        for (i in 0 until added) {
-                            val p = dest.numberOfPages - i
-                            if (p >= 1) runCatching { dest.getPage(p).flush() }
-                        }
-                        progress.advance(added)
-                        from = to + 1
-                    }
-                }
-
-                PdfDocument(PdfWriter(outWork.absolutePath, writerProps())).use { dest ->
-                    dest.setFlushUnusedObjects(true)
-
-                    var runStart: Int? = null
-                    var currentRunEnd = -1
-
-                    fun flushRun(rs0: Int, re0: Int) {
-                        if (rs0 <= re0) {
-                            val from1 = rs0 + 1
-                            val to1   = re0 + 1
-                            copyRange1BasedPaged(from1, to1, dest, source.absolutePath)
-                        }
-                    }
-
-                    for (pZero in 0 until total) {
-                        if (pZero in toSkip) {
-                            runStart?.let { flushRun(it, currentRunEnd) }
-                            runStart = null
-                            continue
-                        }
-                        if (runStart == null) {
-                            runStart = pZero
-                            currentRunEnd = pZero
-                        } else if (pZero == currentRunEnd + 1) {
-                            currentRunEnd = pZero
-                        } else {
-                            flushRun(runStart, currentRunEnd)
-                            runStart = pZero
-                            currentRunEnd = pZero
-                        }
-                    }
-                    runStart?.let { flushRun(it, currentRunEnd) }
-                    progress.idle()
-                }
-
-                if (source.exists()) source.delete()
-                outWork.renameTo(source)
-
-                val toSkipIndices = HashSet<Int>()
-                selectedPlp.forEach { plpIdx ->
-                    val start = plpIdx * per
-                    val end = min(totalBefore - 1, start + per - 1)
-                    (start..end).forEach { toSkipIndices.add(it) }
-                }
-                val newRotation = sourceRotation.filterIndexed { index, _ -> !toSkipIndices.contains(index) }
-                sourceRotation = newRotation.toIntArray()
-                sourcePosition = sourcePosition.filterIndexed { index, _ -> !toSkipIndices.contains(index) }.toIntArray()
-                sourceCrop = PdfCrops.afterRemoval(sourceCrop, toSkipIndices)
-
-                createTempPdfInternal()
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("deleteSelected")
-
-                    for (i in selectedPlp.asReversed()) {
-                        if (i in viewModel.pageItems.indices) {
-                            val removed = viewModel.pageItems.removeAt(i)
-                            removed.thumbnail = null
-                            adapter.notifyItemRemoved(i)
-                        }
-                    }
-
-                    val onReloadStarted: () -> Unit = {
-                        hideInProgressIfShown()
-                        unlockScreenOrientation()
-                    }
-
-                    reloadThumbnailsFromPlp(
-                        releaseUiAtStart = false,
-                        onStarted = onReloadStarted
-                    )
-
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.failed_to_delete_selected_groups_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+        startLayoutChange(
+            PdfOperationKind.DELETE_SELECTED,
+            getString(R.string.in_progress_delete),
+            PdfLayoutChangeOperation.Change.DeleteGroups(selectedPlp)
+        )
     }
 
     private fun exportNamedOutputPdf(plp: File): File {
         cleanupOldExports()
 
-        val baseName = buildOutputFileName().ifBlank { defaultDateForFileName() }
-        val safe = sanitizeFileNameBase(baseName)
+        val baseName = buildOutputFileName().ifBlank { OutputFileName.defaultDate() }
+        val safe = OutputFileName.sanitizeBase(baseName)
         val out = File(cacheDir, "$safe.pdf")
         return try {
             FileInputStream(plp).use { inp ->
@@ -6873,15 +5731,13 @@ class MainActivity : AppCompatActivity() {
         if (!::binding.isInitialized) return
 
         val allowUpdateWithoutWindowFocus: Boolean = try {
-            val anyTrackedDialogShowing = plpSizedDialogs.any { it.isShowing }
-
             val progressShowing = (
                     binding.overlayProgressDialog.isVisible ||
                             binding.overlayProgressDialogUpdateUi.isVisible
                     )
             val sigPosShowing = (binding.overlayDialogSignaturePosition.isVisible)
 
-            anyTrackedDialogShowing || progressShowing || sigPosShowing
+            progressShowing || sigPosShowing
         } catch (_: Exception) {
             false
         }
@@ -6917,6 +5773,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+
+        PdfOperations.runner(this).screenStarted()
 
         lastConfigSnapshotForDiff = Configuration(resources.configuration)
 
@@ -7017,16 +5875,10 @@ class MainActivity : AppCompatActivity() {
         pendingRvUpdate = false
         hasWindowFocusFlag = false
 
-        try {
-            val u = lastGrantedViewUri
-            if (u != null) {
-                revokeUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        } catch (_: Exception) { }
-        lastGrantedViewUri = null
-        lastGrantedPkg = null
         foldableInfoJob?.cancel()
         foldableInfoJob = null
+
+        PdfOperations.runner(this).screenStopped()
 
         super.onStop()
     }
@@ -7056,118 +5908,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleEditedPdfFromViewer(uri: Uri) {
-        showInProgress(getString(R.string.in_progress_page_layout))
-        lockScreenOrientation()
+        val namedExport = lastNamedExport
+        lastNamedExport = null
+        val selected = selectedPlpIndices()
 
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
+        val operation = PdfViewerEditOperation(
+            files = operationFiles(),
+            saveSelection = selectionSaver(selected),
+            input = PdfViewerEditOperation.Input(
+                config = currentNupConfigFromInputs(),
+                builtConfig = lastBuiltNupConfig,
+                crops = sourceCrop,
+                rotation = sourceRotation.copyOf(),
+                position = sourcePosition.copyOf(),
+                defaultPosition = defaultPosition,
+                batchSize = batchValueOrDefault1(),
+                selected = selected
+            ),
+            progress = operationProgress(),
+            copyEdited = { work -> copyEditedFromViewer(uri, namedExport, work) },
+            missingSourceMessage = getString(R.string.temporary_pdf_not_found),
+            warn = { warning, error -> Log.w("PdfMuPdfFitBounds", warning, error) }
+        )
+
+        startOperation(
+            PdfOperationKind.VIEWER_EDIT,
+            getString(R.string.in_progress_page_layout),
+            onCancelled = operation::restoreIfBackedUp,
+            work = operation::execute
+        )
+    }
+
+    @WorkerThread
+    private fun copyEditedFromViewer(uri: Uri, namedExport: File?, work: File) {
+        val editedFile = ownCacheFileFor(uri)
+        namedExport?.let { named ->
+            if (named.canonicalPath != editedFile?.canonicalPath) runCatching { named.delete() }
         }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
-        val selectedIdxBefore = viewModel.pageItems
-            .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            val work = File(cacheDir, "${PLP_TEMP_NAME}.edited")
-            val projectedSource = File(cacheDir, "${SOURCE_TEMP_NAME}.edited")
-            try {
-                if (work.exists()) work.delete()
-                if (projectedSource.exists()) projectedSource.delete()
-
-                val editedFile = ownCacheFileFor(uri)
-                lastNamedExport?.let { named ->
-                    if (named.canonicalPath != editedFile?.canonicalPath) runCatching { named.delete() }
+        if (editedFile == null || !editedFile.renameTo(work)) {
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(work).use { output ->
+                    input.copyTo(output)
+                    output.flush()
                 }
-                lastNamedExport = null
-
-                if (editedFile == null || !editedFile.renameTo(work)) {
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        FileOutputStream(work).use { output ->
-                            input.copyTo(output)
-                            output.flush()
-                        }
-                    } ?: throw IOException(getString(R.string.input_stream_is_null))
-                }
-
-                val editedPages = PdfDocument(rdr(work.absolutePath)).use { it.numberOfPages }
-                val sourcePages = sourceTempPageCount()
-                val progress = progressStage(editedPages + sourcePages + layoutUnits(sourcePages))
-
-                val projected = try {
-                    PdfEditProjection.project(
-                        source = sourceTempFile(),
-                        editedPlp = work,
-                        output = projectedSource,
-                        batchSize = batchValueOrDefault1(),
-                        onProgress = progress::advance
-                    ) { ensureActive() }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: PdfEditProjection.NotProjectableException) {
-                    -1
-                }
-                progress.idle()
-
-                when {
-                    projected > 0 -> {
-                        val source = sourceTempFile()
-                        if (source.exists()) source.delete()
-                        if (!projectedSource.renameTo(source)) throw IOException(getString(R.string.temporary_pdf_not_found))
-                        createTempPdfInternal()
-                    }
-                    projected < 0 -> {
-                        val target = plpTempFile()
-                        if (target.exists()) target.delete()
-                        if (!work.renameTo(target)) {
-                            FileInputStream(work).use { input ->
-                                FileOutputStream(target).use { output ->
-                                    input.copyTo(output)
-                                    output.flush()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("pdfViewerEdit")
-                    reloadThumbnailsFromPlp(
-                        targetIndex = null,
-                        targetOffsetPx = 0,
-                        restorePrevious = true,
-                        indicesToSelect = selectedIdxBefore.toSet(),
-                        releaseUiAtStart = false,
-                        onStarted = {
-                            hideInProgressIfShown()
-                            unlockScreenOrientation()
-                        }
-                    )
-                    updateButtonsState()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.pdf_edits_save_failed, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                runCatching { work.delete() }
-                runCatching { projectedSource.delete() }
-                runCatching {
-                    cacheDir.listFiles()?.forEach { f ->
-                        if (f.name.startsWith("edited_") || f.name.startsWith("flattened_")) f.delete()
-                    }
-                }
-                withContext(Dispatchers.Main) {
-                    unlockScreenOrientation()
-                }
-            }
+            } ?: throw IOException(getString(R.string.input_stream_is_null))
         }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun scheduleCacheCleanupAfterExternalReturn() {
@@ -7765,24 +6551,26 @@ class MainActivity : AppCompatActivity() {
             dest.setFlushUnusedObjects(true)
 
             val batch = batchValueOrDefault1()
-            PdfDocument(rdr(file.absolutePath)).use { src ->
-                val total = src.numberOfPages
-                val progress = progressStage(total.toLong())
-                var from = 1
-                while (from <= total) {
-                    val to = min(from + batch - 1, total)
+            val total = PdfDocument(rdr(file.absolutePath)).use { it.numberOfPages }
+            val progress = progressStage(total.toLong())
+            var from = 1
+            while (from <= total) {
+                val to = min(from + batch - 1, total)
+
+                PdfDocument(rdr(file.absolutePath)).use { src ->
                     src.copyPagesTo(from, to, dest)
                     runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                    val added = to - from + 1
-                    for (i in 0 until added) {
-                        val p = dest.numberOfPages - i
-                        if (p >= 1) runCatching { dest.getPage(p).flush() }
-                    }
-                    progress.advance(added)
-                    from = to + 1
                 }
-                progress.idle()
+
+                val added = to - from + 1
+                for (i in 0 until added) {
+                    val p = dest.numberOfPages - i
+                    if (p >= 1) runCatching { dest.getPage(p).flush() }
+                }
+                progress.advance(added)
+                from = to + 1
             }
+            progress.idle()
         }
 
         if (!file.delete()) {
@@ -7791,341 +6579,6 @@ class MainActivity : AppCompatActivity() {
         }
         if (!tmp.renameTo(file)) {
             throw IOException(getString(R.string.failed_to_rename_encrypted_pdf))
-        }
-    }
-
-    @Throws(Exception::class)
-    fun createNupPdf(outFile: File) {
-
-        if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
-
-        val writerProps = writerProps()
-        var fitBounds: PdfMuPdfFitBounds? = null
-
-        try {
-
-            val cfg = currentNupConfigFromInputs()
-            val editGeneration = PdfEditProjection.newGeneration()
-            val rows = cfg.rows
-            val cols = cfg.cols
-            val marginMm = cfg.marginMm
-            val land = cfg.isLandscape
-            val drawFrame = cfg.drawFrame
-            val scaleIndRequested = cfg.scaleIndividually
-            val fitIndRequested = cfg.fitIndividually
-            val basePs = if (land) PageSize.A4.rotate()
-            else PageSize.A4
-
-            val source = sourceTempFile()
-            if (!source.exists()) throw IllegalStateException(getString(R.string.no_source_pages))
-
-            val totalSrcPages = PdfDocument(rdr(source.absolutePath)).use { it.numberOfPages }
-            if (sourceRotation.size != totalSrcPages) {
-                sourceRotation = IntArray(totalSrcPages)
-            }
-            ensurePositionSize(totalSrcPages)
-
-            val marginPt = marginMm * 72f / 25.4f
-            val per      = (rows * cols).coerceAtLeast(1)
-            val isPortraitMode = !land
-            val isSingleUp     = (per == 1)
-
-            val totalOutPages = if (totalSrcPages == 0) 0 else (totalSrcPages + per - 1) / per
-            if (totalOutPages == 0) {
-                FileOutputStream(outFile).use {
-
-                }
-                return
-            }
-            val progress = progressStage(
-                totalSrcPages.toLong() + totalOutPages + if (per == 1) totalSrcPages else 0
-            )
-
-            val outPagesPerChunk = batchValueOrDefault1()
-            val partFiles = mutableListOf<File>()
-
-            var outPageStart = 0
-            var chunkIndex = 0
-            while (outPageStart < totalOutPages) {
-
-                val outPageEndInclusive = min(totalOutPages - 1, outPageStart + outPagesPerChunk - 1)
-
-                val srcStart = outPageStart * per
-                val srcEnd   = min(totalSrcPages - 1, (outPageEndInclusive + 1) * per - 1)
-
-                val partFile = File((outFile.parentFile ?: cacheDir), outFile.name + ".p" + chunkIndex.toString())
-
-                if (scaleIndRequested && fitIndRequested) {
-                    fitBounds = runCatching { PdfMuPdfFitBounds(source.absolutePath) }
-                        .onFailure { Log.w("PdfMuPdfFitBounds", "MuPDF open failed", it) }
-                        .getOrNull()
-                }
-
-                PdfDocument(rdr(source.absolutePath)).use { src ->
-                    PdfDocument(
-                        PdfWriter(partFile.absolutePath, writerProps)
-                    ).use { pdf ->
-                        pdf.setFlushUnusedObjects(true)
-
-                        var idxLocal = 0
-                        var globalIdx = srcStart
-                        val editCells = ArrayList<PdfEditProjection.Cell>()
-                        while (globalIdx <= srcEnd) {
-                            val page1Based = globalIdx + 1
-                            val sp = src.getPage(page1Based)
-                            val pageBox = PdfCopySupport.visibleBox(sp)
-                            val sz = sourceCrop[globalIdx]?.applyTo(pageBox) ?: pageBox
-
-                            var contentWidth  = sz.width
-                            var contentHeight = sz.height
-
-                            var contentOriginX = sz.x
-                            var contentOriginY = sz.y
-                            var hasBoundingBox = false
-
-                            if (scaleIndRequested && fitIndRequested) {
-                                runCatching { fitBounds?.contentBox(globalIdx, sz) }
-                                    .onFailure { Log.w("PdfMuPdfFitBounds", "Fit measurement failed on page $page1Based", it) }
-                                    .getOrNull()?.let { box ->
-                                        contentWidth = box.width
-                                        contentHeight = box.height
-                                        contentOriginX = box.x
-                                        contentOriginY = box.y
-                                        hasBoundingBox = true
-                                    }
-                            }
-
-                            val rotation = sourceRotation.getOrElse(globalIdx) { 0 }
-                            val isSideways = rotation == 1 || rotation == 3
-
-                            val scaleBox = if (scaleIndRequested) sz else pageBox
-                            val srcPageW = if (isSideways) scaleBox.height else scaleBox.width
-                            val srcPageH = if (isSideways) scaleBox.width else scaleBox.height
-
-                            if (idxLocal % per == 0) {
-                                val psForThisPage =
-                                    if (isPortraitMode && isSingleUp) PageSize.A4
-                                    else basePs
-                                pdf.addNewPage(psForThisPage)
-                            }
-
-                            val currentPage = pdf.lastPage
-                            val canvas      = PdfCanvas(currentPage)
-
-                            val psForThisPage = currentPage.pageSize
-                            val cellW = (psForThisPage.width  - marginPt * (cols + 1)) / cols
-                            val cellH = (psForThisPage.height - marginPt * (rows + 1)) / rows
-
-                            val scale: Float
-                            if (scaleIndRequested) {
-                                val fitContentW = if (isSideways) contentHeight else contentWidth
-                                val fitContentH = if (isSideways) contentWidth else contentHeight
-                                scale = min(cellW / fitContentW, cellH / fitContentH)
-                            } else {
-                                val srcIsPortrait = srcPageH >= srcPageW
-                                val refW = if (srcIsPortrait) PageSize.A4.width else PageSize.A4.height
-                                val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
-                                scale = min(min(cellW / refW, cellH / refH), 1f)
-                            }
-
-                            val col     = idxLocal % cols
-                            val row     = (idxLocal / cols) % rows
-                            val cellX   = marginPt + col * (cellW + marginPt)
-                            val cellY   = marginPt + (rows - 1 - row) * (cellH + marginPt)
-
-                            val finalScale: Float
-                            if (isPortraitMode && isSingleUp) {
-                                val fit =
-                                    if (scaleIndRequested && fitIndRequested) {
-                                        val fitContentW = if (isSideways) contentHeight else contentWidth
-                                        val fitContentH = if (isSideways) contentWidth else contentHeight
-                                        min(cellW / fitContentW, cellH / fitContentH)
-                                    } else {
-                                        min(cellW / srcPageW, cellH / srcPageH)
-                                    }
-                                val s = if (scaleIndRequested) fit else min(fit, 1f)
-                                finalScale = if (!scaleIndRequested) {
-                                    if (s < 1f) s else scale
-                                } else {
-                                    s
-                                }
-                            } else {
-                                val fitToCell = min(cellW / srcPageW, cellH / srcPageH)
-                                finalScale =
-                                    if (!scaleIndRequested) {
-                                        val fitNoUpscale = min(fitToCell, 1f)
-                                        if (isSingleUp) {
-                                            if (fitNoUpscale < 1f) fitNoUpscale else scale
-                                        } else {
-                                            val srcIsPortrait = srcPageH >= srcPageW
-                                            val orientationMismatch =
-                                                (land && srcIsPortrait) || (!land && !srcIsPortrait)
-
-                                            if (!orientationMismatch) {
-                                                min(scale, fitNoUpscale)
-                                            } else {
-                                                val fitW = cellW / srcPageW
-                                                val fitH = cellH / srcPageH
-                                                val limitIsWidth = fitW <= fitH
-                                                val refW = if (srcIsPortrait) PageSize.A4.width else PageSize.A4.height
-                                                val refH = if (srcIsPortrait) PageSize.A4.height else PageSize.A4.width
-                                                val srcRel = if (limitIsWidth) (srcPageW / refW) else (srcPageH / refH)
-                                                val threshold = 0.5f
-                                                val preferFit = srcRel >= threshold
-                                                val candidate = if (preferFit) fitNoUpscale else scale
-                                                min(candidate, fitNoUpscale)
-                                            }
-                                        }
-                                    } else {
-                                        scale
-                                    }
-                            }
-
-                            val fx  = runCatching { PdfCopySupport.flattenedFormXObject(sp, pdf, sz) }.getOrNull()
-                                ?: sp.copyAsFormXObject(pdf)
-                            fx.bBox = PdfArray(sz)
-                            runCatching { PdfEditProjection.tagLayerSource(fx, sp, globalIdx, editGeneration) }
-                            canvas.saveState()
-
-                            val useBoundingBox = scaleIndRequested && fitIndRequested && hasBoundingBox
-
-                            val scaledW: Float
-                            val scaledH: Float
-                            val originX: Float
-                            val originY: Float
-
-                            if (useBoundingBox) {
-                                scaledW = contentWidth * finalScale
-                                scaledH = contentHeight * finalScale
-                                originX = contentOriginX
-                                originY = contentOriginY
-                            } else {
-                                scaledW = sz.width * finalScale
-                                scaledH = sz.height * finalScale
-                                originX = sz.x
-                                originY = sz.y
-                            }
-
-                            val rotatedScaledW = if (isSideways) scaledH else scaledW
-                            val rotatedScaledH = if (isSideways) scaledW else scaledH
-
-                            val position = validPosition(sourcePosition.getOrElse(globalIdx) { DEFAULT_POSITION })
-                            val offsetX = cellX + (cellW - rotatedScaledW) * horizontalPositionFactor(position)
-                            val offsetY = cellY + (cellH - rotatedScaledH) * verticalPositionFactor(position)
-
-                            val a: Double
-                            val b: Double
-                            val c: Double
-                            val d: Double
-                            val e: Double
-                            val f: Double
-
-                            when (rotation) {
-                                1 -> {
-                                    a = 0.0
-                                    b = finalScale.toDouble()
-                                    c = -finalScale.toDouble()
-                                    d = 0.0
-                                    e = offsetX.toDouble() + scaledH + originY * finalScale
-                                    f = offsetY.toDouble() - originX * finalScale
-                                }
-                                2 -> {
-                                    a = -finalScale.toDouble()
-                                    b = 0.0
-                                    c = 0.0
-                                    d = -finalScale.toDouble()
-                                    e = offsetX.toDouble() + scaledW + originX * finalScale
-                                    f = offsetY.toDouble() + scaledH + originY * finalScale
-                                }
-                                3 -> {
-                                    a = 0.0
-                                    b = -finalScale.toDouble()
-                                    c = finalScale.toDouble()
-                                    d = 0.0
-                                    e = offsetX.toDouble() - originY * finalScale
-                                    f = offsetY.toDouble() + scaledW + originX * finalScale
-                                }
-                                else -> {
-                                    a = finalScale.toDouble()
-                                    b = 0.0
-                                    c = 0.0
-                                    d = finalScale.toDouble()
-                                    e = offsetX.toDouble() - originX * finalScale
-                                    f = offsetY.toDouble() - originY * finalScale
-                                }
-                            }
-
-                            PdfCopySupport.concatPlacementMatrix(canvas, a, b, c, d, e, f)
-                            editCells += PdfEditProjection.Cell(globalIdx, doubleArrayOf(a, b, c, d, e, f))
-
-                            canvas.addXObjectWithTransformationMatrix(fx, 1f, 0f, 0f, 1f, 0f, 0f)
-                            runCatching { fx.flush() }
-                            canvas.restoreState()
-
-                            if (drawFrame) {
-                                canvas.setStrokeColor(ColorConstants.BLACK)
-                                    .setLineWidth(1f)
-                                    .rectangle(cellX.toDouble(), cellY.toDouble(), cellW.toDouble(), cellH.toDouble())
-                                    .stroke()
-                            }
-
-                            if (idxLocal % per == per - 1 || globalIdx == srcEnd) {
-                                runCatching { PdfEditProjection.markPlpPage(currentPage, editCells, editGeneration) }
-                                editCells.clear()
-                                runCatching { currentPage.flush() }
-                            }
-
-                            idxLocal++
-                            globalIdx++
-                            progress.advance(1)
-                        }
-                    }
-                }
-
-                fitBounds?.close()
-                fitBounds = null
-
-                partFiles += partFile
-                outPageStart = outPageEndInclusive + 1
-                chunkIndex++
-            }
-
-            PdfDocument(
-                PdfWriter(outFile.absolutePath, writerProps)
-            ).use { destDoc ->
-                destDoc.setFlushUnusedObjects(true)
-                val partBatch = batchValueOrDefault1()
-
-                for (pf in partFiles) {
-                    val total = PdfDocument(rdr(pf.absolutePath)).use { it.numberOfPages }
-
-                    var from = 1
-                    while (from <= total) {
-                        val to = min(from + partBatch - 1, total)
-
-                        PdfDocument(rdr(pf.absolutePath)).use { partDoc ->
-                            partDoc.copyPagesTo(from, to, destDoc)
-                            runCatching { PdfCopySupport.flushCopiedObjects(destDoc, partDoc) }
-                        }
-
-                        val count = to - from + 1
-                        for (i in 0 until count) {
-                            val p = destDoc.numberOfPages - i
-                            if (p >= 1) runCatching { destDoc.getPage(p).flush() }
-                        }
-                        progress.advance(count)
-
-                        from = to + 1
-                    }
-                }
-                progress.idle()
-            }
-
-            partFiles.forEach { runCatching { it.delete() } }
-
-        } finally {
-            fitBounds?.let { runCatching { it.close() } }
-            if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
         }
     }
 
@@ -8270,7 +6723,7 @@ class MainActivity : AppCompatActivity() {
         val fileNameEt: EditText = findViewById(R.id.file_name)
         val tmpl = fileNameEt.text?.toString().orEmpty().trim()
 
-        if (tmpl.isNotBlank()) return replaceTimeTokensIn(tmpl)
+        if (tmpl.isNotBlank()) return OutputFileName.replaceTimeTokens(tmpl)
 
         val rowsStr = numberOfRows.text?.toString()?.trim().orEmpty()
         val colsStr = numberOfColumns.text?.toString()?.trim().orEmpty()
@@ -8284,52 +6737,7 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.default_tmpl_label)
         }
 
-        return replaceTimeTokensIn(defTemplate)
-    }
-
-    private fun replaceTimeTokensIn(template: String): String {
-        val now = Date()
-        var s = template
-        fun fmt(pat: String): String = SimpleDateFormat(pat, Locale.getDefault()).format(now)
-        s = s.replace("[YYYY]", fmt("yyyy"))
-        s = s.replace("[YY]",   fmt("yy"))
-        s = s.replace("[MM]",   fmt("MM"))
-        s = s.replace("[DD]",   fmt("dd"))
-        s = s.replace("[hh]",   fmt("HH"))
-        s = s.replace("[mm]",   fmt("mm"))
-        s = s.replace("[ss]",   fmt("ss"))
-        return s
-    }
-
-    private fun defaultDateForFileName(): String =
-        SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
-
-    private fun sanitizeFileNameBase(name: String): String {
-        if (name.isBlank()) return defaultDateForFileName()
-
-        val cleaned = buildString(name.length) {
-            for (ch in name) {
-                if (ch.code in 0x00..0x1F ||
-                    ch == '"' || ch == '<' || ch == '>' || ch == '|' ||
-                    ch == ':' || ch == '*' || ch == '?' || ch == '/' || ch == '\\'
-                ) append('_') else append(ch)
-            }
-        }
-
-        var trimmed = cleaned.trimEnd { it == ' ' || it == '.' }
-        if (trimmed.isEmpty()) trimmed = "_"
-
-        if (trimmed == "." || trimmed == "..") trimmed = "_$trimmed"
-        val reserved = setOf(
-            "CON","PRN","AUX","NUL",
-            "COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
-            "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"
-        )
-        if (trimmed.uppercase() in reserved) trimmed = "_$trimmed"
-
-        if (trimmed.length > MAX_BASE_LEN) trimmed = trimmed.take(MAX_BASE_LEN)
-
-        return trimmed
+        return OutputFileName.replaceTimeTokens(defTemplate)
     }
 
     private fun sharePdfWithViewOptions(uri: Uri) {
@@ -8339,7 +6747,7 @@ class MainActivity : AppCompatActivity() {
             type = "application/pdf"
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            val displayName = (buildOutputFileName().ifBlank { defaultDateForFileName() }) + ".pdf"
+            val displayName = (buildOutputFileName().ifBlank { OutputFileName.defaultDate() }) + ".pdf"
             putExtra(Intent.EXTRA_TITLE, displayName)
             putExtra(Intent.EXTRA_SUBJECT, displayName)
         }
@@ -8400,566 +6808,63 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun signSelectedPagesOnSourceTemp(
-        signatureFilePath: String,
+        signatureFile: File,
+        signatureWidth: Int,
+        signatureHeight: Int,
         inputXMM: Float,
         inputYMM: Float,
         applyScanEffect: Boolean,
         applyGrayscalePage: Boolean
     ) {
-        isSigningCancelled = false
-        showInProgress(getString(R.string.in_progress_signing))
-        lockScreenOrientation()
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
+        if (signatureWidth <= 0 || signatureHeight <= 0) {
+            Toast.makeText(this, getString(R.string.signature_image_invalid), Toast.LENGTH_LONG).show()
+            return
         }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
-        if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
+        val selected = selectedPlpIndices().sorted()
+        if (selected.isEmpty() || !plpTempFile().exists() || !sourceTempFile().exists()) {
+            Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            var handedOffToNupRebuild = false
+        isSigningCancelled = false
 
-            val isLand = landscape.isChecked
-            val a4Wmm = if (isLand) 297f else 210f
-            val a4Hmm = if (isLand) 210f else 297f
-
-            val refPx = currentSignatureRefPx()
-
-            val sigBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(signatureFilePath, sigBounds)
-            if (sigBounds.outWidth <= 0 || sigBounds.outHeight <= 0) {
-                withContext(Dispatchers.Main) {
-                    hideInProgressIfShown()
-                    Toast.makeText(this@MainActivity, getString(R.string.signature_image_invalid), Toast.LENGTH_LONG).show()
-                }
-                return@launch
-            }
-
-            val selectedPlpIndices = viewModel.pageItems
-                .mapIndexedNotNull { idx, it -> if (it.isSelected) idx else null }
-                .sorted()
-
-            if (selectedPlpIndices.isEmpty()) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
-                    hideInProgressIfShown()
-                }
-                return@launch
-            }
-
-            if (isSigningCancelled) {
-                return@launch
-            }
-
-            val plp = plpTempFile()
-            if (!plp.exists()) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
-                    hideInProgressIfShown()
-                }
-                return@launch
-            }
-
-            fun calcInSampleSize(srcW: Int, srcH: Int, dstW: Int, dstH: Int): Int {
-                var sample = 1
-                val halfW = srcW / 2
-                val halfH = srcH / 2
-                while (halfW / sample >= dstW && halfH / sample >= dstH) {
-                    sample *= 2
-                }
-                return sample.coerceAtLeast(1)
-            }
-
-            fun applyScanEffectToBitmap(src: Bitmap): Bitmap {
-                val w = src.width
-                val h = src.height
-                val out = createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                val c = Canvas(out)
-
-                val cm = ColorMatrix().apply { setSaturation(0.95f) }
-                val contrast = 1.05f
-                val brightness = -5f
-                val m = floatArrayOf(
-                    contrast, 0f, 0f, 0f, brightness,
-                    0f, contrast, 0f, 0f, brightness,
-                    0f, 0f, contrast, 0f, brightness,
-                    0f, 0f, 0f, 1f, 0f
-                )
-                cm.postConcat(ColorMatrix(m))
-                val basePaint = Paint(
-                    Paint.ANTI_ALIAS_FLAG
-                            or Paint.DITHER_FLAG
-                            or Paint.FILTER_BITMAP_FLAG
-                ).apply {
-                    colorFilter = ColorMatrixColorFilter(cm)
-                }
-                c.drawBitmap(src, 0f, 0f, basePaint)
-
-                run {
-                    val edgeAlpha = 12
-                    val p = Paint(Paint.ANTI_ALIAS_FLAG)
-                    p.shader = LinearGradient(
-                        0f, 0f, 0f, h.toFloat(),
-                        Color.argb(edgeAlpha, 0, 0, 0),
-                        Color.TRANSPARENT,
-                        Shader.TileMode.CLAMP
-                    )
-                    c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
-                    p.shader = LinearGradient(
-                        0f, 0f, w.toFloat(), 0f,
-                        Color.argb(edgeAlpha, 0, 0, 0),
-                        Color.TRANSPARENT,
-                        Shader.TileMode.CLAMP
-                    )
-                    c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
-                }
-
-                return out
-            }
-
-            val writerProps = writerProps()
-                .setFullCompressionMode(true)
-                .setCompressionLevel(CompressionConstants.BEST_COMPRESSION)
-
-            val tmpSigned = mutableMapOf<Int, File>()
-
-            try {
-                val signedPageWeight = signedPageWeight(
-                    highDpi = selectedDpiIndexForSignature == 1,
+        val operation = PdfSignOperation(
+            files = operationFiles(),
+            saveSelection = selectionSaver(selected),
+            input = PdfSignOperation.Input(
+                signature = SignedPageRenderer.Signature(
+                    file = signatureFile,
+                    width = signatureWidth,
+                    height = signatureHeight,
+                    refPx = currentSignatureRefPx(),
+                    xMm = inputXMM,
+                    yMm = inputYMM,
+                    isLandscape = landscape.isChecked,
                     scanEffect = applyScanEffect,
                     grayscale = applyGrayscalePage
-                )
-                val progress = run {
-                    val plpPages = PdfDocument(rdr(plp.absolutePath)).use { it.numberOfPages }
-                    val sourcePages = sourceTempPageCount()
-                    progressStage(
-                        selectedPlpIndices.size.toLong() * signedPageWeight +
-                            plpPages + sourcePages + layoutUnits(sourcePages)
-                    )
-                }
-
-                ParcelFileDescriptor.open(plp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                    PdfRenderer(pfd).use { renderer ->
-                        for (idx in selectedPlpIndices) {
-                            if (isSigningCancelled) {
-                                return@launch
-                            }
-
-                            if (idx < 0 || idx >= renderer.pageCount) continue
-
-                            renderer.openPage(idx).use { page: PdfRenderer.Page ->
-                                val (targetW, targetH) = if (!isLand) {
-                                    val k = refPx / page.width.toFloat()
-                                    val w = refPx.toInt()
-                                    val h = max(1, round(page.height * k).toInt())
-                                    w to h
-                                } else {
-                                    val k = refPx / page.height.toFloat()
-                                    val h = refPx.toInt()
-                                    val w = max(1, round(page.width * k).toInt())
-                                    w to h
-                                }
-
-                                var pageBmp = createBitmap(
-                                    targetW,
-                                    targetH,
-                                    Bitmap.Config.ARGB_8888
-                                )
-                                var pageCanvas = Canvas(pageBmp)
-                                pageCanvas.drawColor(Color.WHITE)
-
-                                val s = min(
-                                    targetW.toFloat() / page.width.toFloat(),
-                                    targetH.toFloat() / page.height.toFloat()
-                                )
-                                val dx = (targetW - page.width * s) / 2f
-                                val dy = (targetH - page.height * s) / 2f
-                                val mat = Matrix().apply {
-                                    postScale(s, s)
-                                    postTranslate(dx, dy)
-                                }
-                                page.render(pageBmp, null, mat, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-                                if (applyGrayscalePage) {
-                                    val grayBmp = createBitmap(pageBmp.width, pageBmp.height, Bitmap.Config.ARGB_8888)
-                                    val grayCanvas = Canvas(grayBmp)
-                                    val cm = ColorMatrix().apply { setSaturation(0f) }
-                                    val paint = Paint(
-                                        Paint.ANTI_ALIAS_FLAG or
-                                                Paint.DITHER_FLAG or
-                                                Paint.FILTER_BITMAP_FLAG
-                                    ).apply {
-                                        colorFilter = ColorMatrixColorFilter(cm)
-                                    }
-                                    grayCanvas.drawBitmap(pageBmp, 0f, 0f, paint)
-                                    if (!pageBmp.isRecycled) pageBmp.recycle()
-                                    pageBmp = grayBmp
-                                    pageCanvas = Canvas(pageBmp)
-                                }
-
-                                val pxPerMMX = targetW.toFloat() / a4Wmm
-                                val pxPerMMY = targetH.toFloat() / a4Hmm
-                                val pxX = inputXMM * pxPerMMX
-                                val pxY = inputYMM * pxPerMMY
-
-                                val refAxisPx = if (isLand) targetH.toFloat() else targetW.toFloat()
-                                val sigScale = refAxisPx / refPx
-
-                                val desiredSigW = max(1, round(sigBounds.outWidth  * sigScale).toInt())
-                                val desiredSigH = max(1, round(sigBounds.outHeight * sigScale).toInt())
-
-                                val sample = calcInSampleSize(sigBounds.outWidth, sigBounds.outHeight, desiredSigW, desiredSigH)
-                                val sigOpts = BitmapFactory.Options().apply {
-                                    inSampleSize = sample
-                                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                                }
-                                val sigBmp = BitmapFactory.decodeFile(signatureFilePath, sigOpts)
-                                    ?: run {
-                                        Log.w("MainActivity", "Signature decode failed at page $idx")
-                                        if (!pageBmp.isRecycled) pageBmp.recycle()
-                                        return@use
-                                    }
-
-                                val dst = RectF(pxX, pxY, pxX + desiredSigW, pxY + desiredSigH)
-                                pageCanvas.drawBitmap(sigBmp, null, dst, null)
-                                sigBmp.recycle()
-
-                                val bitmapForExport: Bitmap =
-                                    if (applyScanEffect) {
-                                        val b = applyScanEffectToBitmap(pageBmp)
-                                        if (!pageBmp.isRecycled) pageBmp.recycle()
-                                        b
-                                    } else {
-                                        pageBmp
-                                    }
-
-                                val out = File(cacheDir, "${timeStamp}_signed_${System.currentTimeMillis()}_${idx}.pdf")
-                                ByteArrayOutputStream().use { _ ->
-                                    val wBmp = bitmapForExport.width
-                                    val hBmp = bitmapForExport.height
-                                    val intPixels = IntArray(wBmp * hBmp)
-                                    bitmapForExport.getPixels(intPixels, 0, wBmp, 0, 0, wBmp, hBmp)
-                                    val rgb = ByteArray(wBmp * hBmp * 3)
-                                    var pIx = 0
-                                    for (i in intPixels.indices) {
-                                        val c = intPixels[i]
-                                        rgb[pIx++] = ((c ushr 16) and 0xFF).toByte()
-                                        rgb[pIx++] = ((c ushr 8) and 0xFF).toByte()
-                                        rgb[pIx++] = (c and 0xFF).toByte()
-                                    }
-                                    val imageData = ImageDataFactory.create(
-                                        wBmp,
-                                        hBmp,
-                                        3,
-                                        8,
-                                        rgb,
-                                        null
-                                    )
-
-                                    val pageSize = if (isLand) PageSize.A4.rotate() else PageSize.A4
-
-                                    PdfDocument(PdfWriter(out.absolutePath, writerProps)).use { destDoc: PdfDocument ->
-                                        destDoc.setFlushUnusedObjects(true)
-
-                                        val pg = destDoc.addNewPage(pageSize)
-
-                                        val imgRatio = bitmapForExport.width.toFloat() / bitmapForExport.height.toFloat()
-                                        val pageRatio = pageSize.width / pageSize.height
-                                        val (destW, destH) = if (imgRatio > pageRatio) {
-                                            val w = pageSize.width
-                                            val h = w / imgRatio
-                                            w to h
-                                        } else {
-                                            val h = pageSize.height
-                                            val w = h * imgRatio
-                                            w to h
-                                        }
-                                        val offX = (pageSize.width - destW) / 2f
-                                        val offY = (pageSize.height - destH) / 2f
-
-                                        PdfCanvas(pg).addImageFittedIntoRectangle(
-                                            imageData,
-                                            Rectangle(offX, offY, destW, destH),
-                                            false
-                                        )
-                                        pg.flush()
-                                    }
-                                }
-
-                                tmpSigned[idx] = out
-
-                                if (!bitmapForExport.isRecycled) bitmapForExport.recycle()
-                            }
-
-                            progress.advance(signedPageWeight)
-                            yield()
-                            delay(5L.milliseconds)
-                        }
-                    }
-                }
-
-                if (isSigningCancelled) {
-                    return@launch
-                }
-
-                val plpWork = File(cacheDir, "${PLP_TEMP_NAME}.work")
-                if (plpWork.exists()) plpWork.delete()
-
-                PdfDocument(PdfWriter(plpWork.absolutePath, writerProps)).use { destDoc ->
-                    destDoc.setFlushUnusedObjects(true)
-
-                    val pageBatch = batchValueOrDefault1()
-
-                    fun copyRange1BasedPaged(srcPath: String, from1: Int, to1: Int) {
-                        var from = from1
-                        while (from <= to1) {
-                            val to = min(from + pageBatch - 1, to1)
-                            PdfDocument(rdr(srcPath)).use { src ->
-                                src.copyPagesTo(from, to, destDoc)
-                                runCatching { PdfCopySupport.flushCopiedObjects(destDoc, src) }
-                            }
-                            val added = to - from + 1
-                            for (i in 0 until added) {
-                                val p = destDoc.numberOfPages - i
-                                if (p >= 1) runCatching { destDoc.getPage(p).flush() }
-                            }
-                            progress.advance(added)
-                            from = to + 1
-                        }
-                    }
-
-                    val totalPlpPages = PdfDocument(rdr(plp.absolutePath)).use { it.numberOfPages }
-
-                    var runStart: Int? = null
-                    for (p in 1..totalPlpPages) {
-                        if (isSigningCancelled) {
-                            return@launch
-                        }
-                        val zeroIdx = p - 1
-                        val replacement = tmpSigned[zeroIdx]
-                        if (replacement != null) {
-                            runStart?.let { copyRange1BasedPaged(plp.absolutePath, it, p - 1) }
-                            runStart = null
-
-                            PdfDocument(rdr(replacement.absolutePath)).use { replDoc ->
-                                replDoc.copyPagesTo(1, 1, destDoc)
-                                runCatching { PdfCopySupport.flushCopiedObjects(destDoc, replDoc) }
-                            }
-                            runCatching { destDoc.lastPage?.flush() }
-                            progress.advance(1)
-                        } else {
-                            if (runStart == null) runStart = p
-                        }
-                    }
-                    runStart?.let { copyRange1BasedPaged(plp.absolutePath, it, totalPlpPages) }
-                    progress.idle()
-                }
-
-                if (isSigningCancelled) {
-                    runCatching { plpWork.delete() }
-                    return@launch
-                }
-
-                if (plp.exists()) plp.delete()
-                plpWork.renameTo(plp)
-
-                val signedList = tmpSigned.entries.map { it.key to it.value.absolutePath }
-                tmpSigned.clear()
-
-                withContext(Dispatchers.Main) {
-                    updateButtonsState()
-                    currentSigFile = null
-                    updateSignatureInputFilters()
-                }
-
-                if (isSigningCancelled) {
-                    return@launch
-                }
-
-                handedOffToNupRebuild = true
-                updateSourceWithSignedGroups(signedList) {
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, getString(R.string.signing_failed_with_msg, e.message), Toast.LENGTH_LONG).show()
-                    hideInProgressIfShown()
-                    unlockScreenOrientation()
-                }
-            } finally {
-                tmpSigned.values.forEach { runCatching { it.delete() } }
-                withContext(Dispatchers.Main) {
-                    if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
-
-                    if (!handedOffToNupRebuild) {
-                        unlockScreenOrientation()
-                    }
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
-    }
-
-    private fun updateSourceWithSignedGroups(
-        signedList: List<Pair<Int, String>>,
-        onReloadStarted: (() -> Unit)? = null
-    ) {
-        try {
-            if (isSigningCancelled) {
-                runCatching {
-                    signedList.forEach { (_, path) -> runCatching { File(path).delete() } }
-                }
-                return
-            }
-
-            val srcFile = sourceTempFile()
-            if (!srcFile.exists()) return
-
-            val writerProps = writerProps()
-            val signedMap = signedList.toMap()
-
-            val outWorkSrc = sourceWorkFile()
-            if (outWorkSrc.exists()) outWorkSrc.delete()
-
-            val pageBatch = batchValueOrDefault1()
-            val totalPages = PdfDocument(rdr(srcFile.absolutePath)).use { it.numberOfPages }
-            val progress = progressStage(totalPages + layoutUnits(totalPages))
-
-            fun copyRange1BasedPaged(srcPath: String, dest: PdfDocument, from1: Int, to1: Int) {
-                var from = from1
-                while (from <= to1) {
-                    val to = min(from + pageBatch - 1, to1)
-                    PdfDocument(rdr(srcPath)).use { src ->
-                        src.copyPagesTo(from, to, dest)
-                        runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                    }
-                    val added = to - from + 1
-                    for (i in 0 until added) {
-                        val p = dest.numberOfPages - i
-                        if (p >= 1) runCatching { dest.getPage(p).flush() }
-                    }
-                    progress.advance(added)
-                    from = to + 1
-                }
-            }
-
-            var originalTotal = 0
-            PdfDocument(PdfWriter(outWorkSrc.absolutePath, writerProps)).use { destSrcDoc ->
-                destSrcDoc.setFlushUnusedObjects(true)
-
-                originalTotal = totalPages
-                val per = perGroup()
-
-                var p = 1
-                var runStart: Int? = null
-
-                while (p <= totalPages) {
-                    if (isSigningCancelled) {
-                        return
-                    }
-
-                    val groupIndex = (p - 1) / per
-                    val replPath = signedMap[groupIndex]
-
-                    if (replPath != null) {
-                        runStart?.let { copyRange1BasedPaged(srcFile.absolutePath, destSrcDoc, it, p - 1) }
-                        runStart = null
-
-                        PdfDocument(rdr(replPath)).use { repl ->
-                            repl.copyPagesTo(1, 1, destSrcDoc)
-                            runCatching { PdfCopySupport.flushCopiedObjects(destSrcDoc, repl) }
-                        }
-                        runCatching { destSrcDoc.lastPage?.flush() }
-
-                        val groupStart = groupIndex * per + 1
-                        val groupEnd = min(totalPages, groupStart + per - 1)
-                        progress.advance(groupEnd - groupStart + 1)
-                        p = groupEnd + 1
-                    } else {
-                        if (runStart == null) runStart = p
-                        p++
-                    }
-                }
-
-                runStart?.let { copyRange1BasedPaged(srcFile.absolutePath, destSrcDoc, it, totalPages) }
-                progress.idle()
-            }
-
-            if (isSigningCancelled) {
-                runCatching { outWorkSrc.delete() }
-                return
-            }
-
-            if (srcFile.exists()) srcFile.delete()
-            outWorkSrc.renameTo(srcFile)
-
-            val per = perGroup()
-            val signedStarts = signedMap.keys.map { it * per }.filter { it < originalTotal }
-            val mergedIntoSigned = PdfSignedGroups.mergedIndices(signedStarts, per, originalTotal)
-            sourceCrop = PdfCrops.afterRemoval(PdfCrops.withCrop(sourceCrop, signedStarts, null), mergedIntoSigned)
-            sourceRotation = PdfSignedGroups.afterMerge(
-                sourceRotation, originalTotal, signedStarts, mergedIntoSigned, signedValue = 0, missingValue = 0
-            )
-            sourcePosition = PdfSignedGroups.afterMerge(
-                sourcePosition, originalTotal, signedStarts, mergedIntoSigned,
-                signedValue = DEFAULT_POSITION, missingValue = defaultPosition
-            )
-
-        } catch (_: Exception) {
-
-        } finally {
-            runCatching {
-                signedList.forEach { (_, path) -> runCatching { File(path).delete() } }
-            }
-
-            if (!isSigningCancelled) {
-                scheduleNupRebuild(onReloadStarted)
-            }
-        }
-    }
-
-    private fun scheduleNupRebuild(onReloadStarted: (() -> Unit)? = null) {
-        runCatching {
-
-            if (::binding.isInitialized && (
-                        binding.overlayProgressDialog.isVisible ||
-                                binding.overlayProgressDialogUpdateUi.isVisible
-                        )
-            ) {
-                lockScreenOrientation()
-            }
-        }.onFailure {
-
-        }
-
-        val job = lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                createTempPdfInternal()
-            } finally {
-                withContext(Dispatchers.Main) {
-                    resetThumbDocKey("nup_rebuilt_${System.currentTimeMillis()}")
-
-                    reloadThumbnailsFromPlp(
-                        releaseUiAtStart = false,
-                        onStarted = {
-                            unlockScreenOrientation()
-                            onReloadStarted?.invoke()
-                        }
-                    )
-
-                    updateButtonsState()
-                }
-            }
-        }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
+                ),
+                highDpi = selectedDpiIndexForSignature == 1,
+                plpIndices = selected,
+                perGroup = perGroup(),
+                config = currentNupConfigFromInputs(),
+                crops = sourceCrop,
+                rotation = sourceRotation.copyOf(),
+                position = sourcePosition.copyOf(),
+                defaultPosition = defaultPosition,
+                batchSize = batchValueOrDefault1()
+            ),
+            progress = operationProgress(),
+            renderer = MuPdfSignedPageRenderer(warn = { warning, error -> Log.w("MainActivity", warning, error) }),
+            warn = { warning, error -> Log.w("PdfMuPdfFitBounds", warning, error) }
+        )
+
+        startOperation(
+            PdfOperationKind.SIGN,
+            getString(R.string.in_progress_signing),
+            onCancelled = operation::restoreIfBackedUp,
+            work = operation::execute
+        )
     }
 
     private class SimpleTextWatcher(private val cb: () -> Unit) : TextWatcher {
@@ -9409,7 +7314,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun setThemeMode(mode: String) {
+    private fun setThemeMode(mode: String) {
         val prefs = getSharedPreferences(PREFS_NAME_FRAGMENT, MODE_PRIVATE)
         synchronized(prefsBackupLock) {
             prefs.edit { putString(KEY_THEME_MODE, mode) }

@@ -8,6 +8,7 @@ import android.view.View
 import androidx.pdf.PdfDocument
 import androidx.pdf.PdfPoint
 import androidx.pdf.view.PdfView
+import hu.reelee81.pdflabelprinting.PdfPageNavigationState.Companion.EDGE_TOLERANCE_PX
 
 internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit) {
     private val state = PdfPageNavigationState()
@@ -61,8 +62,8 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
             for (pageIndex in firstVisiblePage until firstVisiblePage + visiblePagesCount) {
                 val bounds = pageLocations[pageIndex] ?: continue
                 visiblePageSizes.put(pageIndex, SizeF(bounds.width() / zoomLevel, bounds.height() / zoomLevel))
-                if (bounds.left >= -1f && bounds.top >= -1f &&
-                    bounds.right <= view.width + 1f && bounds.bottom <= view.height + 1f
+                if (bounds.left >= -EDGE_TOLERANCE_PX && bounds.top >= -EDGE_TOLERANCE_PX &&
+                    bounds.right <= view.width + EDGE_TOLERANCE_PX && bounds.bottom <= view.height + EDGE_TOLERANCE_PX
                 ) shownPages += pageIndex
                 val width = (minOf(bounds.right, view.width.toFloat()) - maxOf(bounds.left, 0f))
                     .coerceAtLeast(0f)
@@ -197,11 +198,12 @@ internal class PdfPageNavigator(private val onOperationStateChanged: () -> Unit)
             val origin = view.pdfToViewPoint(PdfPoint(pageIndex, 0f, 0f)) ?: return@let null
             RectF(origin.x, origin.y, origin.x + size.width * view.zoom, origin.y + size.height * view.zoom)
         }
-        val centerY = view.paddingTop + (view.height - view.paddingTop - view.paddingBottom) / 2f
         val completed = pending != null && bounds != null &&
-            bounds.right > view.paddingLeft && bounds.left < view.width - view.paddingRight &&
-            (centerY in bounds.top..bounds.bottom ||
-                (bounds.top >= view.paddingTop && bounds.bottom <= view.height - view.paddingBottom)) &&
+            PdfPageNavigationState.isPageReached(
+                bounds.left, bounds.top, bounds.right, bounds.bottom,
+                view.paddingLeft.toFloat(), view.paddingTop.toFloat(),
+                (view.width - view.paddingRight).toFloat(), (view.height - view.paddingBottom).toFloat()
+            ) &&
             state.confirmArrival(pending)
         documentShown = true
         if (state.pendingPageIndex == null) opening = false

@@ -97,6 +97,7 @@
     <string name="signature_image_invalid">Az aláírás képe nem található/érvénytelen</string>
     <string name="enter_value_0_100">Adj meg 0 és 100 közötti értéket (mm)</string>
     <string name="enter_value_1_100">Adj meg 1 és 100 közötti értéket</string>
+    <string name="signature_image_too_large">Az aláíráskép mérete túl nagy.</string>
     <string name="max_coordinates_x_y_mm">Max. koordináták X: %1$d mm, Y: %2$d mm</string>
     <string name="editor_open_error">Hiba történt a szerkesztő megnyitásakor.</string>
     <string name="default_tmpl_normal">Normal_[YYYY][MM][DD][hh][mm][ss]</string>

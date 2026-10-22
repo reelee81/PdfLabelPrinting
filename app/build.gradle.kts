@@ -70,6 +70,8 @@ android {
 
 dependencies {
 
+    implementation(project(":core"))
+    implementation(project(":pdf"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -78,14 +80,8 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    implementation(libs.itextpdf.kernel)
-    implementation(libs.itextpdf.layout)
-    implementation(libs.itextpdf.forms)
-    implementation(libs.itextpdf.bc.adapter)
-    implementation(libs.itextpdf.bc.connector)
     implementation(libs.androidx.pdf.viewer)
     implementation(libs.androidx.pdf.ink)
     implementation(libs.androidx.window)
-    implementation(libs.mupdf.fitz)
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
 }

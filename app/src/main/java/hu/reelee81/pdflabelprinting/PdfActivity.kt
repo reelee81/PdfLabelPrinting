@@ -17,10 +17,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import com.google.android.material.progressindicator.LinearProgressIndicator
-import java.util.concurrent.atomic.AtomicLong
+import hu.reelee81.pdflabelprinting.pdf.PdfProgress
+import hu.reelee81.pdflabelprinting.pdf.ProgressTracker
 import kotlin.math.ceil
-import kotlin.math.max
-import kotlin.math.min
 
 abstract class PdfActivity : AppCompatActivity() {
     private var lastConfiguration: Configuration? = null
@@ -54,28 +53,11 @@ abstract class PdfActivity : AppCompatActivity() {
         }
     }
 
-    private val progressDone = AtomicLong(0L)
-    @Volatile private var progressTotal = 0L
-    @Volatile private var progressIdleSince = 0L
-    private var progressLastPercent = -1
+    private val progressTracker = ProgressTracker(SystemClock::uptimeMillis)
     private var progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
     private var progressNotifiedAt = 0L
 
-    protected inner class PdfProgressStage {
-        fun advance(units: Int) {
-            progressDone.addAndGet(units.toLong())
-            progressIdleSince = 0L
-        }
-
-        fun idle() {
-            if (progressIdleSince == 0L) progressIdleSince = SystemClock.uptimeMillis()
-        }
-    }
-
-    protected fun progressStage(remaining: Long): PdfProgressStage {
-        progressTotal = progressDone.get() + remaining
-        return PdfProgressStage()
-    }
+    protected fun progressStage(remaining: Long): PdfProgress = progressTracker.stage(remaining)
 
     protected abstract fun isPdfNavigationInProgress(): Boolean
 
@@ -287,10 +269,7 @@ abstract class PdfActivity : AppCompatActivity() {
     }
 
     private fun resetProgress() {
-        progressDone.set(0L)
-        progressTotal = 0L
-        progressIdleSince = SystemClock.uptimeMillis()
-        progressLastPercent = -1
+        progressTracker.reset()
         progressNotified = PdfProcessingForegroundService.PROGRESS_NONE
         progressNotifiedAt = 0L
         waitOverlay?.findViewById<LinearProgressIndicator>(R.id.progress_bar_indicator)?.let { indicator ->
@@ -306,15 +285,8 @@ abstract class PdfActivity : AppCompatActivity() {
         val now = SystemClock.uptimeMillis()
         if (now - waitStartedAt < PROGRESS_REVEAL_MS) return true
 
-        val total = progressTotal
-        val done = min(progressDone.get(), total)
-        val idleSince = progressIdleSince
-        val measuring = total > 0 && done > 0 && (idleSince == 0L || now - idleSince < PROGRESS_IDLE_MS)
-        val percent = if (measuring) {
-            max(progressLastPercent, (done * 100 / total).toInt()).also { progressLastPercent = it }
-        } else {
-            PdfProcessingForegroundService.PROGRESS_INDETERMINATE
-        }
+        val percent = progressTracker.percent(now, PROGRESS_IDLE_MS)
+            ?: PdfProcessingForegroundService.PROGRESS_INDETERMINATE
 
         val indicator = overlay.findViewById<LinearProgressIndicator>(R.id.progress_bar_indicator)
         val label = overlay.findViewById<TextView>(R.id.progress_bar_percent)

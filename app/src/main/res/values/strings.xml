@@ -98,6 +98,7 @@
     <string name="signature_image_invalid">Signature image not found/invalid</string>
     <string name="enter_value_0_100">Enter a value between 0 and 100 (mm)</string>
     <string name="enter_value_1_100">Enter a value between 1 and 100</string>
+    <string name="signature_image_too_large">The signature image is too large.</string>
     <string name="max_coordinates_x_y_mm">Max coordinates X: %1$d mm, Y: %2$d mm</string>
     <string name="editor_open_error">An error occurred while opening the editor.</string>
     <string name="default_tmpl_normal">Normal_[YYYY][MM][DD][hh][mm][ss]</string>
