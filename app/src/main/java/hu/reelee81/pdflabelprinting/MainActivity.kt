@@ -289,6 +289,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var batchPage: TextInputEditText
     private lateinit var passwordOutCb: MaterialCheckBox
 
+    private val isFitMeasurable = Build.VERSION.SDK_INT >= VERSION_CODES.O
     private var pendingSaveNamedPath: String? = null
     private var pendingSaveNamedDisplayName: String? = null
     private var isLoadingSettingsProfile = false
@@ -587,7 +588,7 @@ class MainActivity : AppCompatActivity() {
 
         scaleSwitch = findViewById(R.id.scale)
         fitSwitch = findViewById(R.id.fit)
-        fitSwitch.isEnabled = scaleSwitch.isChecked
+        updateFitSwitchEnabled()
 
         signaturePosX = findViewById(R.id.signature_position_x)
         signaturePosY = findViewById(R.id.signature_position_y)
@@ -613,8 +614,8 @@ class MainActivity : AppCompatActivity() {
             maybeRegeneratePlpOnSettingChange()
         }
 
-        scaleSwitch.setOnCheckedChangeListener { _, isChecked ->
-            fitSwitch.isEnabled = isChecked
+        scaleSwitch.setOnCheckedChangeListener { _, _ ->
+            updateFitSwitchEnabled()
             maybeRegeneratePlpOnSettingChange()
         }
 
@@ -3294,8 +3295,8 @@ class MainActivity : AppCompatActivity() {
         batchPage.setText(batchVal)
         passwordOutCb.isChecked = passwordOutChecked
         scaleSwitch.isChecked = scale
-        fitSwitch.isChecked = fit
-        fitSwitch.isEnabled = scaleSwitch.isChecked
+        setFitChecked(fit)
+        updateFitSwitchEnabled()
 
         setupEnterClosesEditTextAndHidesKeyboard(numberOfRows)
         setupEnterClosesEditTextAndHidesKeyboard(numberOfColumns)
@@ -3410,8 +3411,8 @@ class MainActivity : AppCompatActivity() {
             signaturePosX.setText(data["nlSigPosX"] as String)
             signaturePosY.setText(data["nlSigPosY"] as String)
             scaleSwitch.isChecked = data["nlScale"] as Boolean
-            fitSwitch.isChecked = data["nlFit"] as Boolean
-            fitSwitch.isEnabled = scaleSwitch.isChecked
+            setFitChecked(data["nlFit"] as Boolean)
+            updateFitSwitchEnabled()
             val profilePosition = validPosition(data["nlPosition"] as Int)
             cropAllPages = data["nlCrop"] as Boolean
             batchPage.setText(data["nlBatchPage"] as String)
@@ -3829,8 +3830,8 @@ class MainActivity : AppCompatActivity() {
 
                 drawFrameSwitch.isChecked = saved.drawFrame
                 scaleSwitch.isChecked = saved.scale
-                fitSwitch.isChecked = saved.fit
-                fitSwitch.isEnabled = scaleSwitch.isChecked
+                setFitChecked(saved.fit)
+                updateFitSwitchEnabled()
 
                 lastBuiltNupConfig = NupConfig(
                     saved.rows.toIntOrNull() ?: 1,
@@ -4007,8 +4008,16 @@ class MainActivity : AppCompatActivity() {
         val marginMm = min(readIntOr(margin, min = 0, def = 0), maxMarginMm(rows, cols, isLand))
         val drawFrame = drawFrameSwitch.isChecked
         val scaleInd = scaleSwitch.isChecked
-        val fitInd = fitSwitch.isChecked
+        val fitInd = fitSwitch.isChecked && isFitMeasurable
         return NupConfig(rows, cols, marginMm, isLand, drawFrame, scaleInd, fitInd)
+    }
+
+    private fun setFitChecked(checked: Boolean) {
+        fitSwitch.isChecked = checked && isFitMeasurable
+    }
+
+    private fun updateFitSwitchEnabled() {
+        fitSwitch.isEnabled = isFitMeasurable && scaleSwitch.isChecked
     }
 
     private fun nupConfigChanged(): Boolean {
