@@ -110,7 +110,6 @@ import com.google.android.material.textview.MaterialTextView
 import com.itextpdf.io.image.ImageDataFactory
 import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.geom.Rectangle
-import com.itextpdf.kernel.pdf.EncryptionConstants
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfReader
 import com.itextpdf.kernel.pdf.PdfWriter
@@ -139,13 +138,14 @@ import hu.reelee81.pdflabelprinting.core.SignatureGeometry.refPxForSignatureDpi
 import hu.reelee81.pdflabelprinting.core.WorkFileBackup
 import hu.reelee81.pdflabelprinting.databinding.ActivityMainBinding
 import hu.reelee81.pdflabelprinting.pdf.MuPdfSignedPageRenderer
-import hu.reelee81.pdflabelprinting.pdf.PdfCopySupport
 import hu.reelee81.pdflabelprinting.pdf.PdfImportOperation
 import hu.reelee81.pdflabelprinting.pdf.PdfIo
 import hu.reelee81.pdflabelprinting.pdf.PdfLayoutChangeOperation
+import hu.reelee81.pdflabelprinting.pdf.PdfOutputOperation
 import hu.reelee81.pdflabelprinting.pdf.PdfPageSizes
 import hu.reelee81.pdflabelprinting.pdf.PdfProgress
 import hu.reelee81.pdflabelprinting.pdf.PdfSignOperation
+import hu.reelee81.pdflabelprinting.pdf.PdfSourceParts
 import hu.reelee81.pdflabelprinting.pdf.PdfViewerEditOperation
 import hu.reelee81.pdflabelprinting.pdf.ProgressTracker
 import hu.reelee81.pdflabelprinting.pdf.SignedPageRenderer
@@ -173,7 +173,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -243,13 +242,11 @@ class MainActivity : AppCompatActivity() {
         const val DEFAULT_SIG_POS_X_MM = 155
         const val DEFAULT_SIG_POS_Y_MM = 245
 
-        private const val SOURCE_TEMP_NAME = "source_temp.pdf"
-        private const val SOURCE_TEMP_WORK = "source_temp_work.pdf"
+        private const val SOURCE_TEMP_NAME = "source_temp"
         private const val PLP_TEMP_NAME = "plp_temp.pdf"
-        private const val SOURCE_TEMP_COPY_NAME = "source_temp_copy.pdf"
+        private const val SOURCE_TEMP_COPY_NAME = "source_temp_copy"
         private const val PLP_TEMP_COPY_NAME = "plp_temp_copy.pdf"
         private const val MAX_INPUT = 100
-        private const val KEEP_RECENT_EXPORTS = 0
         private const val MAX_IMG_W = 8411
         private const val MAX_IMG_H = 8411
         private const val PROGRESS_TICK_MS = 500L
@@ -670,63 +667,7 @@ class MainActivity : AppCompatActivity() {
             if (result.resultCode == RESULT_OK && result.data != null) {
                 val uri = result.data?.data
                 if (uri != null) {
-                    val backupJob = lifecycleScope.launch {
-                        backupSelectionState()
-                    }
-                    activeJobs.add(backupJob)
-                    backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-                    showInProgress(getString(R.string.in_progress_save))
-                    lockScreenOrientation()
-                    val job = lifecycleScope.launch(Dispatchers.IO) {
-                        try {
-                            val srcPath = pendingSaveNamedPath
-                            if (srcPath.isNullOrEmpty()) throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-                            val srcFile = File(srcPath)
-                            if (!srcFile.exists()) throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-
-                            contentResolver.openOutputStream(uri)?.use { out ->
-                                FileInputStream(srcFile).use { inp ->
-                                    val buffer = ByteArray(16 * 1024)
-                                    var read: Int
-                                    while (inp.read(buffer).also { read = it } > 0) {
-                                        out.write(buffer, 0, read)
-                                    }
-                                    out.flush()
-                                }
-                            } ?: throw IOException(getString(R.string.input_stream_is_null))
-
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    getString(R.string.pdf_saved_successfully),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    getString(R.string.failed_to_generate_pdf_with_msg, e.message),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        } finally {
-                            runCatching { cleanupCacheExceptTemps() }
-
-                            withContext(Dispatchers.Main) {
-                                hideInProgressIfShown()
-                                unlockScreenOrientation()
-                                pendingSaveNamedPath = null
-                                pendingSaveNamedDisplayName = null
-                                maybeRunDeferredUiModeRecreate()
-                            }
-                        }
-                    }
-                    activeJobs.add(job)
-                    job.invokeOnCompletion { activeJobs.remove(job) }
+                    startSaveWrite(uri)
                 } else {
                     pendingSaveNamedPath = null
                     pendingSaveNamedDisplayName = null
@@ -907,7 +848,7 @@ class MainActivity : AppCompatActivity() {
             margin.clearFocus()
             signaturePosX.clearFocus()
             signaturePosY.clearFocus()
-            maybeRegeneratePlpOnSettingChange()
+            if (nupConfigChanged()) maybeRegeneratePlpOnSettingChange()
         }
         saveLabelPages.setOnClickListener {
             saveSettings("label")
@@ -916,7 +857,7 @@ class MainActivity : AppCompatActivity() {
             margin.clearFocus()
             signaturePosX.clearFocus()
             signaturePosY.clearFocus()
-            maybeRegeneratePlpOnSettingChange()
+            if (nupConfigChanged()) maybeRegeneratePlpOnSettingChange()
         }
 
         val normalPages: Button = findViewById(R.id.load_normal_pages)
@@ -951,6 +892,12 @@ class MainActivity : AppCompatActivity() {
                     fitIndividually = values[6] != 0
                 )
             }
+
+        savedInstanceState
+            ?.getString("state_last_named_export")
+            ?.let { lastNamedExport = File(it) }
+        pendingSaveNamedPath = savedInstanceState?.getString("state_pending_save_path")
+        pendingSaveNamedDisplayName = savedInstanceState?.getString("state_pending_save_name")
 
         val bundleIndicesToSelect: Set<Int>? = savedInstanceState
             ?.getByteArray("state_selected_bits")
@@ -1205,16 +1152,11 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
     }
 
-    private fun sourceTempFile(): File = File(cacheDir, SOURCE_TEMP_NAME)
-    private fun sourceWorkFile(): File = File(cacheDir, SOURCE_TEMP_WORK)
+    private fun sourceDir(): File = File(cacheDir, SOURCE_TEMP_NAME)
     private fun plpTempFile(): File = File(cacheDir, PLP_TEMP_NAME)
 
     private fun workFileBackup(): WorkFileBackup =
         WorkFileBackup(cacheDir, SOURCE_TEMP_NAME, PLP_TEMP_NAME, SOURCE_TEMP_COPY_NAME, PLP_TEMP_COPY_NAME)
-
-    private fun backupTempFilesBeforeLongOperation() {
-        workFileBackup().backup()
-    }
 
     private fun scheduleUiModeRecreate() {
         if (isFinishing || isDestroyed) return
@@ -1453,6 +1395,9 @@ class MainActivity : AppCompatActivity() {
                 )
             )
         }
+        lastNamedExport?.let { outState.putString("state_last_named_export", it.absolutePath) }
+        pendingSaveNamedPath?.let { outState.putString("state_pending_save_path", it) }
+        pendingSaveNamedDisplayName?.let { outState.putString("state_pending_save_name", it) }
 
         runCatching {
             val lm = binding.rvThumbnails.layoutManager as? LinearLayoutManager
@@ -1504,10 +1449,10 @@ class MainActivity : AppCompatActivity() {
         requestedOrientation = prev
     }
 
-    private fun sourceTempPageCount(): Int {
-        val f = sourceTempFile()
-        if (!f.exists()) return 0
-        return try { PdfDocument(rdr(f.absolutePath)).use { it.numberOfPages } } catch (_: Exception) { 0 }
+    private fun readableSource(): PdfSourceParts {
+        val dir = sourceDir()
+        if (!PdfSourceParts.exists(dir)) return PdfSourceParts.empty(dir)
+        return try { PdfSourceParts.open(dir) } catch (_: Exception) { PdfSourceParts.empty(dir) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1533,7 +1478,7 @@ class MainActivity : AppCompatActivity() {
             binding.root.postDelayed(workspaceFilesCheck, PENDING_INTENT_RETRY_MS)
             return
         }
-        if (sourceTempFile().exists() && plpTempFile().exists()) return
+        if (PdfSourceParts.exists(sourceDir()) && plpTempFile().exists()) return
 
         clearCacheDir()
         sourceRotation = IntArray(0)
@@ -3859,25 +3804,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun cancelLongRunningWorkAndCleanup() {
-        isSigningCancelled = true
-        progressTracker.cancel()
-
-        reloadThumbnailsGeneration++
-
-        activeJobs.forEach { it.cancel() }
-
-        isPlpRebuilding = false
-        isLoadingSettingsProfile = false
-
-        lifecycleScope.launch {
-            activeJobs.joinAll()
-            activeJobs.clear()
-
-            restoreAfterCancel { workFileBackup().restore() }
-        }
-    }
-
     private suspend fun restoreAfterCancel(restorePlpBackup: () -> Boolean) {
         val saved = withContext(Dispatchers.IO) {
             longOperationStateBackup().read(defaultPosition)
@@ -3948,10 +3874,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun showInProgress(
-        message: String = getString(R.string.in_progress_my),
-        forOperation: Boolean = false
-    ) {
+    private fun showInProgress(message: String) {
         val resolvedMessage = message.ifBlank { getString(R.string.in_progress_my) }
 
         runCatching {
@@ -3962,17 +3885,12 @@ class MainActivity : AppCompatActivity() {
         }.onFailure {
         }
 
-        if (forOperation) {
-            operationOverlay = true
-        } else {
-            PdfProcessingForegroundService.start(this, resolvedMessage)
-        }
+        operationOverlay = true
 
         runCatching {
             val wasShowing = (binding.overlayProgressDialog.isVisible)
 
             if (!wasShowing) {
-                if (!forOperation) backupTempFilesBeforeLongOperation()
                 progressTracker.accepting = true
                 resetProgress(resolvedMessage)
             }
@@ -3989,11 +3907,7 @@ class MainActivity : AppCompatActivity() {
 
             val btnCancel = view.findViewById<MaterialButton>(R.id.progress_bar_cancel)
             btnCancel?.setOnClickListener {
-                if (operationOverlay) {
-                    operationId?.let { PdfOperations.runner(this).cancel(it) }
-                } else {
-                    cancelLongRunningWorkAndCleanup()
-                }
+                operationId?.let { PdfOperations.runner(this).cancel(it) }
 
                 hideInProgressIfShown()
 
@@ -4680,7 +4594,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addEmptyPageToSource() {
-        if (!sourceTempFile().exists()) {
+        if (!PdfSourceParts.exists(sourceDir())) {
             Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
             return
         }
@@ -4818,7 +4732,7 @@ class MainActivity : AppCompatActivity() {
 
                 runCatching {
                     val srcCopy = File(cacheDir, SOURCE_TEMP_COPY_NAME)
-                    if (srcCopy.exists()) srcCopy.delete()
+                    if (srcCopy.exists()) srcCopy.deleteRecursively()
                 }
                 runCatching {
                     val plpCopy = File(cacheDir, PLP_TEMP_COPY_NAME)
@@ -4841,11 +4755,11 @@ class MainActivity : AppCompatActivity() {
             val items = withContext(Dispatchers.IO) {
                 try {
                     val plp = plpTempFile()
-                    val srcFile = sourceTempFile()
-                    if (!plp.exists() || !srcFile.exists()) return@withContext emptyList()
+                    if (!plp.exists() || !PdfSourceParts.exists(sourceDir())) return@withContext emptyList()
 
                     val per = perGroup()
-                    val totalSrcPages = sourceTempPageCount()
+                    val source = readableSource()
+                    val totalSrcPages = source.total
                     if (totalSrcPages <= 0) return@withContext emptyList()
 
                     val plpPages = (totalSrcPages + per - 1) / per
@@ -4879,7 +4793,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val sizes = pageSizes?.takeIf { it.widths.size == totalSrcPages }
                             ?: PdfPageSizes.read(
-                                srcFile,
+                                source,
                                 totalSrcPages,
                                 batchValueOrDefault1(),
                                 fallbackW,
@@ -5335,18 +5249,18 @@ class MainActivity : AppCompatActivity() {
 
     @WorkerThread
     private fun renderCropPreview(sourceIndex: Int, rotation: Int, maxSide: Int): Bitmap? {
-        val source = sourceTempFile()
-        if (!source.exists()) return null
+        val parts = PdfSourceParts.open(sourceDir())
+        if (sourceIndex !in 0 until parts.total) return null
+        val location = parts.locate(sourceIndex)
 
-        val ownRotation = PdfDocument(rdr(source.absolutePath)).use { pdf ->
-            if (sourceIndex !in 0 until pdf.numberOfPages) return null
-            pdf.getPage(sourceIndex + 1).rotation
+        val ownRotation = PdfDocument(rdr(location.file.absolutePath)).use { pdf ->
+            pdf.getPage(location.page + 1).rotation
         }
 
-        val rendered = ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+        val rendered = ParcelFileDescriptor.open(location.file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
             PdfRenderer(pfd).use { renderer ->
-                if (sourceIndex >= renderer.pageCount) return null
-                renderer.openPage(sourceIndex).use { page ->
+                if (location.page >= renderer.pageCount) return null
+                renderer.openPage(location.page).use { page ->
                     val scale = maxSide.coerceAtLeast(1).toFloat() / max(page.width, page.height).coerceAtLeast(1)
                     val bitmap = createBitmap(
                         (page.width * scale).toInt().coerceAtLeast(1),
@@ -5383,7 +5297,7 @@ class MainActivity : AppCompatActivity() {
         config: NupConfig = currentNupConfigFromInputs(),
         savesSelection: Boolean = true
     ): Boolean {
-        if (change !is PdfLayoutChangeOperation.Change.Rebuild && !sourceTempFile().exists()) return false
+        if (change !is PdfLayoutChangeOperation.Change.Rebuild && !PdfSourceParts.exists(sourceDir())) return false
 
         val selectedIdxBefore = selectedPlpIndices()
         val saveSelection = selectionSaver(selectedIdxBefore)
@@ -5430,7 +5344,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun operationFiles(): PdfLayoutChangeOperation.Files =
-        PdfLayoutChangeOperation.Files(cacheDir, sourceTempFile(), plpTempFile(), workFileBackup(), sourceWorkFile())
+        PdfLayoutChangeOperation.Files(cacheDir, sourceDir(), plpTempFile(), workFileBackup())
 
     private fun operationProgress(): PdfLayoutChangeOperation.Progress =
         PdfLayoutChangeOperation.Progress(SystemClock::uptimeMillis, PROGRESS_TICK_MS, PROGRESS_IDLE_MS)
@@ -5441,11 +5355,11 @@ class MainActivity : AppCompatActivity() {
         onCancelled: suspend () -> Unit,
         work: suspend (report: (percent: Int?) -> Unit) -> PdfOperationResult?
     ): Boolean {
-        showInProgress(message, forOperation = true)
+        showInProgress(message)
         lockScreenOrientation()
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
 
-        val id = PdfOperations.runner(this).start(kind, message, onCancelled, work)
+        val id =PdfOperations.runner(this).start(kind, message, onCancelled, work)
         if (id == null) {
             isPlpRebuilding = false
             operationOverlay = false
@@ -5486,9 +5400,15 @@ class MainActivity : AppCompatActivity() {
         operationOverlay = false
         isPlpRebuilding = false
         if (::adapter.isInitialized) runCatching { adapter.resumePrefetch() }
+        if (kind == PdfOperationKind.SAVE_WRITE) endSaveWrite()
 
         when (step) {
             is PdfOperationScreen.Step.Finish -> {
+                if (kind.isOutput) {
+                    runner.acknowledge(step.id)
+                    finishOutput(step.result, restore, kind)
+                    return
+                }
                 val result = step.result as? PdfLayoutChangeOperation.Result
                 if (result == null || result.cleared) runner.acknowledge(step.id) else handOver(runner, step.id)
                 finishLayoutChange(result, restore, kind)
@@ -5510,6 +5430,7 @@ class MainActivity : AppCompatActivity() {
                 updateButtonsState()
             }
         }
+        if (kind == PdfOperationKind.SAVE_WRITE) maybeRunDeferredUiModeRecreate()
     }
 
     private fun handOver(runner: PdfOperationRunner, id: Long) {
@@ -5528,7 +5449,7 @@ class MainActivity : AppCompatActivity() {
         if (updateUi) {
             showInProgressUpdateUI()
         } else {
-            showInProgress(message, forOperation = true)
+            showInProgress(message)
         }
         lockScreenOrientation()
         if (::adapter.isInitialized) runCatching { adapter.pausePrefetchAndCancel() }
@@ -5614,6 +5535,10 @@ class MainActivity : AppCompatActivity() {
             PdfOperationKind.IMPORT -> R.string.error_loading_pdf_with_msg
             PdfOperationKind.VIEWER_EDIT -> R.string.pdf_edits_save_failed
             PdfOperationKind.SIGN -> R.string.signing_failed_with_msg
+            PdfOperationKind.PRINT -> R.string.failed_to_generate_pdf_with_msg
+            PdfOperationKind.SEND -> R.string.failed_to_generate_share_pdf_with_msg
+            PdfOperationKind.OPEN -> R.string.failed_to_open_pdf_with_msg
+            PdfOperationKind.SAVE_EXPORT, PdfOperationKind.SAVE_WRITE -> R.string.failed_to_generate_pdf_with_msg
             PdfOperationKind.CROP, null -> R.string.failed_to_crop_selected_groups_with_msg
         }
         Toast.makeText(this, getString(messageRes, error.message), Toast.LENGTH_LONG).show()
@@ -5653,6 +5578,10 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val PdfOperationKind?.isOutput: Boolean
+        get() = this == PdfOperationKind.PRINT || this == PdfOperationKind.SEND || this == PdfOperationKind.OPEN ||
+            this == PdfOperationKind.SAVE_EXPORT || this == PdfOperationKind.SAVE_WRITE
+
     private val PdfOperationKind?.rewritesSource: Boolean
         get() = this == PdfOperationKind.DELETE_GROUP || this == PdfOperationKind.DELETE_SELECTED ||
             this == PdfOperationKind.EMPTY_PAGE || this == PdfOperationKind.REORDER || this == PdfOperationKind.SIGN
@@ -5679,23 +5608,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun exportNamedOutputPdf(plp: File): File {
-        cleanupOldExports()
-
-        val baseName = buildOutputFileName().ifBlank { OutputFileName.defaultDate() }
-        val safe = OutputFileName.sanitizeBase(baseName)
-        val out = File(cacheDir, "$safe.pdf")
-        return try {
-            FileInputStream(plp).use { inp ->
-                FileOutputStream(out).use { outP -> inp.copyTo(outP) }
-            }
-            lastNamedExport = out
-            out
-        } catch (_: Exception) {
-            plp
-        }
-    }
-
     private fun ownCacheFileFor(uri: Uri): File? {
         if (uri.scheme != "content" || uri.authority != "$packageName.provider") return null
         val segments = uri.pathSegments
@@ -5704,27 +5616,6 @@ class MainActivity : AppCompatActivity() {
         if (name.isEmpty() || name.contains('/') || name == "." || name == "..") return null
         val file = File(cacheDir, name)
         return file.takeIf { it.isFile && it.parentFile?.canonicalPath == cacheDir.canonicalPath }
-    }
-
-    private fun cleanupOldExports(keepRecent: Int = KEEP_RECENT_EXPORTS) {
-        val protected = setOf(
-            PLP_TEMP_NAME,
-            SOURCE_TEMP_NAME,
-            SOURCE_TEMP_WORK,
-            SOURCE_TEMP_COPY_NAME,
-            PLP_TEMP_COPY_NAME
-        )
-
-        val pdfs = cacheDir
-            .listFiles { f -> f.isFile && f.extension.equals("pdf", true) && f.name !in protected }
-            ?.toList()
-            .orEmpty()
-
-        val sorted = pdfs.sortedByDescending { it.lastModified() }
-
-        if (sorted.size > keepRecent) {
-            sorted.drop(keepRecent).forEach { it.delete() }
-        }
     }
 
     private fun requestRvThumbnailsHeightUpdate() {
@@ -5927,7 +5818,6 @@ class MainActivity : AppCompatActivity() {
             ),
             progress = operationProgress(),
             copyEdited = { work -> copyEditedFromViewer(uri, namedExport, work) },
-            missingSourceMessage = getString(R.string.temporary_pdf_not_found),
             warn = { warning, error -> Log.w("PdfMuPdfFitBounds", warning, error) }
         )
 
@@ -5962,32 +5852,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openPdfWithDriveOrOther(initialPageIndex: Int) {
-        showInProgress(getString(R.string.in_progress_pdf_reading))
-        lockScreenOrientation()
+        val operation = outputOperation(password = null)
+        startOperation(
+            PdfOperationKind.OPEN,
+            getString(R.string.in_progress_pdf_reading),
+            onCancelled = operation::discard,
+            work = { report -> OpenResult(operation.execute(report).file, initialPageIndex) }
+        )
+    }
 
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
+    private fun openExported(named: File, initialPageIndex: Int) {
         val job = lifecycleScope.launch {
             try {
-                val plp = withContext(Dispatchers.IO) {
-                    val f = plpTempFile()
-                    if (!f.exists()) {
-                        throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-                    }
-                    f
-                }
-                val named = withContext(Dispatchers.IO) { exportNamedOutputPdf(plp) }
-
                 val uri = withContext(Dispatchers.IO) {
                     FileProvider.getUriForFile(this@MainActivity, "${packageName}.provider", named)
                 }
-
-                hideInProgressIfShown()
-                unlockScreenOrientation()
 
                 val shouldUseInternal: Boolean =
                     Build.VERSION.SDK_INT >= VERSION_CODES.P &&
@@ -6220,189 +6099,178 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private class OpenResult(val file: File, val pageIndex: Int) : PdfOperationResult
+
+    private fun outputOperation(password: ByteArray?): PdfOutputOperation =
+        PdfOutputOperation(
+            files = PdfOutputOperation.Files(
+                cacheDir,
+                plpTempFile(),
+                setOf(PLP_TEMP_NAME, SOURCE_TEMP_NAME, SOURCE_TEMP_COPY_NAME, PLP_TEMP_COPY_NAME)
+            ),
+            saveSelection = selectionSaver(selectedPlpIndices()),
+            input = PdfOutputOperation.Input(
+                baseName = buildOutputFileName().ifBlank { OutputFileName.defaultDate() },
+                password = password,
+                batchSize = batchValueOrDefault1(),
+                messages = PdfOutputOperation.Messages(
+                    layoutMissing = getString(R.string.temporary_pdf_not_found),
+                    nameReserved = getString(R.string.output_name_reserved),
+                    replaceFailed = getString(R.string.failed_to_replace_original_pdf_with_encrypted_version),
+                    renameFailed = getString(R.string.failed_to_rename_encrypted_pdf)
+                )
+            ),
+            progress = operationProgress()
+        )
+
+    private fun startOutput(kind: PdfOperationKind, message: String, password: ByteArray?) {
+        val operation = outputOperation(password)
+        startOperation(kind, message, onCancelled = operation::discard, work = operation::execute)
+    }
+
+    private fun finishOutput(result: PdfOperationResult?, restore: ThumbRestore?, kind: PdfOperationKind?) {
+        hideInProgressIfShown()
+        unlockScreenOrientation()
+        restore?.let { reloadAfterOperation(it) }
+
+        if (kind == PdfOperationKind.SAVE_WRITE) {
+            Toast.makeText(this, getString(R.string.pdf_saved_successfully), Toast.LENGTH_LONG).show()
+            maybeRunDeferredUiModeRecreate()
+            return
+        }
+
+        val file = when (result) {
+            is OpenResult -> result.file
+            is PdfOutputOperation.Result -> result.file
+            else -> return
+        }
+        lastNamedExport = file
+
+        when (kind) {
+            PdfOperationKind.PRINT -> printExported(file)
+            PdfOperationKind.SEND -> shareExported(file)
+            PdfOperationKind.OPEN -> openExported(file, (result as? OpenResult)?.pageIndex ?: 0)
+            PdfOperationKind.SAVE_EXPORT -> askSaveLocation(file)
+            else -> Unit
+        }
+    }
+
     private fun printNupPdf() {
-        showInProgress(getString(R.string.in_progress_print))
-        lockScreenOrientation()
+        startOutput(PdfOperationKind.PRINT, getString(R.string.in_progress_print), password = null)
+    }
 
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
-
-        val job = lifecycleScope.launch {
-            try {
-                val (namedPath, namedName) = withContext(Dispatchers.IO) {
-                    val plp = run {
-                        val f = plpTempFile()
-                        if (!f.exists()) {
-                            throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-                        }
-                        f
-                    }
-                    val named = exportNamedOutputPdf(plp)
-                    named.absolutePath to named.name
-                }
-
-                hideInProgressIfShown()
-                unlockScreenOrientation()
-
-                val printManager = getSystemService(PrintManager::class.java)
-                if (printManager == null) {
-                    Toast.makeText(this@MainActivity, getString(R.string.print_service_not_available), Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-
-                val adapter = PdfDocumentAdapter(namedPath, namedName)
-                printManager.print(namedName, adapter, PrintAttributes.Builder().build())
-                scheduleCacheCleanupAfterExternalReturn()
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                hideInProgressIfShown()
-                unlockScreenOrientation()
-                Toast.makeText(
-                    this@MainActivity,
-                    getString(R.string.failed_to_generate_pdf_with_msg, e.message),
-                    Toast.LENGTH_LONG
-                ).show()
+    private fun printExported(named: File) {
+        try {
+            val printManager = getSystemService(PrintManager::class.java)
+            if (printManager == null) {
+                Toast.makeText(this, getString(R.string.print_service_not_available), Toast.LENGTH_LONG).show()
+                return
             }
+
+            val adapter = PdfDocumentAdapter(named.absolutePath, named.name)
+            printManager.print(named.name, adapter, PrintAttributes.Builder().build())
+            scheduleCacheCleanupAfterExternalReturn()
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                getString(R.string.failed_to_generate_pdf_with_msg, e.message),
+                Toast.LENGTH_LONG
+            ).show()
         }
-        activeJobs.add(job)
-        job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
     private fun saveNupPdf() {
-
-        val needsOutputPassword = passwordOutCb.isChecked
-        if (!needsOutputPassword) {
-            showInProgress(getString(R.string.in_progress_save))
-            lockScreenOrientation()
+        if (!passwordOutCb.isChecked) {
+            startOutput(PdfOperationKind.SAVE_EXPORT, getString(R.string.in_progress_save), password = null)
+            return
         }
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
         val job = lifecycleScope.launch {
-            try {
-                val outputPasswordBytes: ByteArray? = if (needsOutputPassword) {
-                    val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
-                    if (pw == null) {
-                        return@launch
-                    }
-
-                    showInProgress(getString(R.string.in_progress_save))
-                    lockScreenOrientation()
-
-                    pw
-                } else null
-
-                val (namedPath, namedName) = withContext(Dispatchers.IO) {
-                    val plp = run {
-                        val f = plpTempFile()
-                        if (!f.exists()) {
-                            throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-                        }
-                        f
-                    }
-                    val named = exportNamedOutputPdf(plp)
-
-                    if (outputPasswordBytes != null) {
-                        encryptPdfInPlace(named, outputPasswordBytes)
-                    }
-
-                    named.absolutePath to named.name
-                }
-
-                pendingSaveNamedPath = namedPath
-                pendingSaveNamedDisplayName = namedName
-
-                hideInProgressIfShown()
-                unlockScreenOrientation()
-
-                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_TITLE, namedName)
-                }
-                saveDocumentLauncher.launch(intent)
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                hideInProgressIfShown()
-                unlockScreenOrientation()
-                Toast.makeText(
-                    this@MainActivity,
-                    getString(R.string.failed_to_generate_pdf_with_msg, e.message),
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+            val password = getConfirmedOutputPasswordOrNull() ?: return@launch
+            startOutput(PdfOperationKind.SAVE_EXPORT, getString(R.string.in_progress_save), password)
         }
         activeJobs.add(job)
         job.invokeOnCompletion { activeJobs.remove(job) }
     }
 
+    private fun askSaveLocation(named: File) {
+        pendingSaveNamedPath = named.absolutePath
+        pendingSaveNamedDisplayName = named.name
+        try {
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_TITLE, named.name)
+            }
+            saveDocumentLauncher.launch(intent)
+        } catch (e: Exception) {
+            pendingSaveNamedPath = null
+            pendingSaveNamedDisplayName = null
+            Toast.makeText(
+                this,
+                getString(R.string.failed_to_generate_pdf_with_msg, e.message),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun startSaveWrite(uri: Uri) {
+        val source = pendingSaveNamedPath?.takeIf { it.isNotEmpty() }?.let(::File)
+        val resolver = applicationContext.contentResolver
+        val notFound = getString(R.string.temporary_pdf_not_found)
+        val streamNull = getString(R.string.input_stream_is_null)
+        val saveSelection = selectionSaver(selectedPlpIndices())
+
+        startOperation(PdfOperationKind.SAVE_WRITE, getString(R.string.in_progress_save), onCancelled = {}) {
+            withContext(Dispatchers.IO) {
+                saveSelection()
+                if (source == null || !source.exists()) throw IllegalStateException(notFound)
+
+                resolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(source).use { inp ->
+                        val buffer = ByteArray(16 * 1024)
+                        var read: Int
+                        while (inp.read(buffer).also { read = it } > 0) {
+                            out.write(buffer, 0, read)
+                        }
+                        out.flush()
+                    }
+                } ?: throw IOException(streamNull)
+                null
+            }
+        }
+    }
+
+    private fun endSaveWrite() {
+        pendingSaveNamedPath = null
+        pendingSaveNamedDisplayName = null
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { cleanupCacheExceptTemps() } }
+    }
+
     private fun shareNupPdf() {
-
-        val needsOutputPassword = passwordOutCb.isChecked
-        if (!needsOutputPassword) {
-            showInProgress(getString(R.string.in_progress_send))
-            lockScreenOrientation()
+        if (!passwordOutCb.isChecked) {
+            startOutput(PdfOperationKind.SEND, getString(R.string.in_progress_send), password = null)
+            return
         }
-
-        val backupJob = lifecycleScope.launch {
-            backupSelectionState()
-        }
-        activeJobs.add(backupJob)
-        backupJob.invokeOnCompletion { activeJobs.remove(backupJob) }
 
         val job = lifecycleScope.launch {
+            val password = getConfirmedOutputPasswordOrNull() ?: return@launch
+            startOutput(PdfOperationKind.SEND, getString(R.string.in_progress_send), password)
+        }
+        activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
+    }
+
+    private fun shareExported(named: File) {
+        val job = lifecycleScope.launch {
             try {
-                val outputPasswordBytes: ByteArray? = if (needsOutputPassword) {
-                    val pw = withContext(Dispatchers.Main) { getConfirmedOutputPasswordOrNull() }
-                    if (pw == null) {
-                        return@launch
-                    }
-
-                    showInProgress(getString(R.string.in_progress_send))
-                    lockScreenOrientation()
-
-                    pw
-                } else null
-
-                val plp = withContext(Dispatchers.IO) {
-                    val f = plpTempFile()
-                    if (!f.exists()) {
-                        throw IllegalStateException(getString(R.string.temporary_pdf_not_found))
-                    }
-                    f
-                }
-                val named = withContext(Dispatchers.IO) {
-                    val nf = exportNamedOutputPdf(plp)
-                    if (outputPasswordBytes != null) {
-                        encryptPdfInPlace(nf, outputPasswordBytes)
-                    }
-                    nf
-                }
-
                 val uri = withContext(Dispatchers.IO) {
                     FileProvider.getUriForFile(this@MainActivity, "$packageName.provider", named)
                 }
-
-                hideInProgressIfShown()
-                unlockScreenOrientation()
                 sharePdfWithViewOptions(uri)
-
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                hideInProgressIfShown()
-                unlockScreenOrientation()
                 Toast.makeText(
                     this@MainActivity,
                     getString(R.string.failed_to_generate_share_pdf_with_msg, e.message),
@@ -6416,9 +6284,6 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun promptForPasswordForOutput(titleResId: Int, errorHintResId: Int? = null): String? =
         suspendCancellableCoroutine { cont ->
-
-            PdfProcessingForegroundService.stop(this@MainActivity)
-            unlockScreenOrientation()
 
             applySoftInputModeForPasswordOverlay()
 
@@ -6530,55 +6395,6 @@ class MainActivity : AppCompatActivity() {
             } else {
                 needErrorOnFirst = true
             }
-        }
-    }
-
-    private fun encryptPdfInPlace(file: File, password: ByteArray) {
-        val tmp = File(file.parentFile, file.nameWithoutExtension + "_enc.pdf")
-
-        val wp = writerProps().apply {
-            setStandardEncryption(
-                password,
-                password,
-                0,
-                EncryptionConstants.ENCRYPTION_AES_256
-            )
-        }
-
-        PdfDocument(
-            PdfWriter(tmp.absolutePath, wp)
-        ).use { dest ->
-            dest.setFlushUnusedObjects(true)
-
-            val batch = batchValueOrDefault1()
-            val total = PdfDocument(rdr(file.absolutePath)).use { it.numberOfPages }
-            val progress = progressStage(total.toLong())
-            var from = 1
-            while (from <= total) {
-                val to = min(from + batch - 1, total)
-
-                PdfDocument(rdr(file.absolutePath)).use { src ->
-                    src.copyPagesTo(from, to, dest)
-                    runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                }
-
-                val added = to - from + 1
-                for (i in 0 until added) {
-                    val p = dest.numberOfPages - i
-                    if (p >= 1) runCatching { dest.getPage(p).flush() }
-                }
-                progress.advance(added)
-                from = to + 1
-            }
-            progress.idle()
-        }
-
-        if (!file.delete()) {
-            runCatching { tmp.delete() }
-            throw IOException(getString(R.string.failed_to_replace_original_pdf_with_encrypted_version))
-        }
-        if (!tmp.renameTo(file)) {
-            throw IOException(getString(R.string.failed_to_rename_encrypted_pdf))
         }
     }
 
@@ -6822,7 +6638,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val selected = selectedPlpIndices().sorted()
-        if (selected.isEmpty() || !plpTempFile().exists() || !sourceTempFile().exists()) {
+        if (selected.isEmpty() || !plpTempFile().exists() || !PdfSourceParts.exists(sourceDir())) {
             Toast.makeText(this, getString(R.string.select_a_page), Toast.LENGTH_SHORT).show()
             return
         }

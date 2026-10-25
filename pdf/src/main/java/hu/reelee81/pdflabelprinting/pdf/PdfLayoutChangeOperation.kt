@@ -1,7 +1,6 @@
 package hu.reelee81.pdflabelprinting.pdf
 
 import com.itextpdf.kernel.geom.PageSize
-import com.itextpdf.kernel.pdf.PdfDocument
 import hu.reelee81.pdflabelprinting.core.NupConfig
 import hu.reelee81.pdflabelprinting.core.PageGroups
 import hu.reelee81.pdflabelprinting.core.PageSizes
@@ -13,8 +12,10 @@ import hu.reelee81.pdflabelprinting.core.ProgressNotifyPacing
 import hu.reelee81.pdflabelprinting.core.ProgressTicker
 import hu.reelee81.pdflabelprinting.core.SourcePageArrays
 import hu.reelee81.pdflabelprinting.core.SourcePageRuns
+import hu.reelee81.pdflabelprinting.core.SourcePartPlan
 import hu.reelee81.pdflabelprinting.core.WorkFileBackup
 import java.io.File
+import java.io.FileNotFoundException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
@@ -28,7 +29,7 @@ class PdfLayoutChangeOperation(
     private val progress: Progress,
     private val warn: (message: String, error: Throwable) -> Unit = { _, _ -> }
 ) {
-    class Files(val workDir: File, val source: File, val plp: File, val backup: WorkFileBackup, val sourceWork: File)
+    class Files(val workDir: File, val sourceDir: File, val plp: File, val backup: WorkFileBackup)
 
     sealed interface Change {
         class Crop(val plpIndex: Int, val crop: PdfCropRect?, val applyToAll: Boolean) : Change
@@ -87,7 +88,8 @@ class PdfLayoutChangeOperation(
         ) {
             saveSelection()
 
-            val total = sourcePageCount()
+            val source = openSource()
+            val total = source.total
             if (total <= 0 && input.change !is Change.Rebuild) return@run null
 
             val removed = (input.change as? Change.DeleteGroups)
@@ -100,13 +102,14 @@ class PdfLayoutChangeOperation(
             backedUp = true
 
             try {
-                val newTotal = rewriteSource(total, removed, tracker::stage)
+                val written = rewriteSource(source, total, removed, tracker::stage)
+                val newTotal = written.total
                 val (crops, rotation, position) = changedArrays(total, newTotal, removed)
 
                 val work = File(files.workDir, "${files.plp.name}.part")
                 if (work.exists()) work.delete()
-                PdfNupBuilder.build(
-                    source = files.source,
+                val pageSizes = PdfNupBuilder.build(
+                    source = written,
                     totalSrcPages = newTotal,
                     outFile = work,
                     workDir = files.workDir,
@@ -120,8 +123,6 @@ class PdfLayoutChangeOperation(
                 )
                 if (files.plp.exists()) files.plp.delete()
                 work.renameTo(files.plp)
-
-                val pageSizes = PdfPageSizes.forThumbnails(files.source, newTotal, input.config, input.batchSize, tracker::stage)
 
                 Built(crops, rotation, position, pageSizes, selectedAfter(total))
             } catch (e: CancellationException) {
@@ -138,32 +139,32 @@ class PdfLayoutChangeOperation(
         Result(built.crops, built.rotation, built.position, input.defaultPosition, input.config, built.selected, tracker.snapshot(), built.pageSizes, built.cleared)
     }
 
-    private fun rewriteSource(total: Int, removed: Set<Int>?, stage: (Long) -> PdfProgress): Int {
+    private fun rewriteSource(source: PdfSourceParts, total: Int, removed: Set<Int>?, stage: (Long) -> PdfProgress): PdfSourceParts {
         val per = (input.config.rows * input.config.cols).coerceAtLeast(1)
         return when (val change = input.change) {
             is Change.DeleteGroups -> {
-                val remaining = total - removed!!.size
-                write(SourcePageRuns.kept(total, removed), stage(remaining + ProgressMath.layoutUnits(remaining, per)))
-                remaining
+                val plan = SourcePartPlan.removePages(source.layout, removed!!)
+                source.write(plan, input.batchSize, stage(plan.writtenPages + ProgressMath.layoutUnits(total - removed.size, per)))
             }
             Change.AddEmptyPage -> {
-                val firstPageSize = PdfDocument(PdfIo.reader(files.source.absolutePath)).use { src ->
-                    val p = src.getPage(1).pageSize
+                val firstPageSize = source.batch { src ->
+                    val p = src.page(0).pageSize
                     PageSize(p.width, p.height)
                 }
-                write(listOf(1..total), stage(total + ProgressMath.layoutUnits(total + 1, per)), firstPageSize)
-                total + 1
+                val plan = SourcePartPlan.append(source.layout, listOf(SourcePartPlan.Piece.EmptyPage))
+                source.write(
+                    plan,
+                    input.batchSize,
+                    stage(plan.writtenPages + ProgressMath.layoutUnits(total + 1, per)),
+                    PdfSourceParts.Inputs(emptyPage = firstPageSize)
+                )
             }
             is Change.Reorder -> {
-                write(SourcePageRuns.reordered(change.groupOrder, input.perGroup, total), stage(total + ProgressMath.layoutUnits(total, per)))
-                total
+                val plan = SourcePartPlan.reorder(source.layout, SourcePageArrays.reorderedIndices(change.groupOrder, input.perGroup, total))
+                source.write(plan, input.batchSize, stage(plan.writtenPages + ProgressMath.layoutUnits(total, per)))
             }
-            else -> total
+            else -> source
         }
-    }
-
-    private fun write(runs: List<IntRange>, progress: PdfProgress, emptyPage: PageSize? = null) {
-        PdfSourceRewrite.write(files.source, files.sourceWork, runs, input.batchSize, progress, emptyPage)
     }
 
     private fun selectedAfter(total: Int): List<Int> = when (val change = input.change) {
@@ -238,9 +239,11 @@ class PdfLayoutChangeOperation(
         }
     }
 
-    private fun sourcePageCount(): Int {
-        if (input.change is Change.Rebuild) return PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages }
-        if (!files.source.exists()) return 0
-        return try { PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages } } catch (_: Exception) { 0 }
+    private fun openSource(): PdfSourceParts {
+        if (input.change is Change.Rebuild) {
+            if (!PdfSourceParts.exists(files.sourceDir)) throw FileNotFoundException(files.sourceDir.path)
+            return PdfSourceParts.open(files.sourceDir)
+        }
+        return try { PdfSourceParts.open(files.sourceDir) } catch (_: Exception) { PdfSourceParts.empty(files.sourceDir) }
     }
 }

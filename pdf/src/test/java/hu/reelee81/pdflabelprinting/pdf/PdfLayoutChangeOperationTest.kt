@@ -49,7 +49,7 @@ class PdfLayoutChangeOperationTest {
         assertEquals(listOf("selection saved"), events)
         assertEquals(3, pageCount(plp()))
         assertFalse(File(dir, "plp_temp.pdf.part").exists())
-        assertEquals(5, pageCount(File(dir, "source_temp_copy.pdf")))
+        assertEquals(5, pageCount(File(dir, "source_temp_copy/0001.pdf")))
         assertEquals("old layout", File(dir, "plp_temp_copy.pdf").readText())
         assertNull(result.pageSizes)
     }
@@ -151,7 +151,7 @@ class PdfLayoutChangeOperationTest {
         assertNull(result)
         assertEquals(listOf("selection saved"), events)
         assertFalse(plp().exists())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
     }
 
@@ -171,9 +171,9 @@ class PdfLayoutChangeOperationTest {
         runBlocking { operation.restoreIfBackedUp() }
         assertEquals(3, pageCount(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
-        assertTrue(dir.listFiles().orEmpty().all { it == source() || it == plp() })
+        assertTrue(dir.listFiles().orEmpty().all { it == sourceDir() || it == plp() })
     }
 
     @Test
@@ -199,7 +199,7 @@ class PdfLayoutChangeOperationTest {
         runBlocking { operation.restoreIfBackedUp() }
         assertEquals(3, pageCount(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
     }
 
@@ -268,6 +268,7 @@ class PdfLayoutChangeOperationTest {
 
     @Test
     fun aRebuildFromAnUnreadableSourceFailsAndLeavesTheLayoutAlone() {
+        sourceDir().mkdirs()
         source().writeText("not a pdf")
         plp().writeText("old layout")
         val operation = operation(change = PdfLayoutChangeOperation.Change.Rebuild(oldPerGroup = 2))
@@ -276,7 +277,7 @@ class PdfLayoutChangeOperationTest {
 
         assertNotNull(failure)
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
         assertEquals(listOf("selection saved"), events)
     }
@@ -303,8 +304,7 @@ class PdfLayoutChangeOperationTest {
         assertEquals(listOf(0, 1), result.selected)
         assertFalse(result.cleared)
         assertEquals(2, pageCount(plp()))
-        assertEquals(5, pageCount(File(dir, "source_temp_copy.pdf")))
-        assertFalse(File(dir, "source_temp_work.pdf").exists())
+        assertEquals(5, pageCount(File(dir, "source_temp_copy/0001.pdf")))
         assertEquals(listOf("selection saved"), events)
     }
 
@@ -336,7 +336,7 @@ class PdfLayoutChangeOperationTest {
         assertEquals(0, result.position.size)
         assertEquals(3, pageCount(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
         assertEquals(listOf("selection saved"), events)
     }
@@ -404,7 +404,7 @@ class PdfLayoutChangeOperationTest {
         assertNotNull(failure)
         assertEquals(listOf(200f, 201f, 202f, 203f, 204f), pageWidths(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
 
         runBlocking { operation.restoreIfBackedUp() }
@@ -412,11 +412,77 @@ class PdfLayoutChangeOperationTest {
         assertEquals("old layout", plp().readText())
     }
 
-    private fun source() = File(dir, "source_temp.pdf")
+    @Test
+    fun deletingFromASourceInPartsRewritesOnlyTheTouchedParts() {
+        writeMarkedParts(2, 2, 1)
+        val untouched = File(sourceDir(), "0001.pdf").readBytes()
+
+        val result = runBlocking {
+            operation(
+                rotation = intArrayOf(1, 2, 3, 0, 1),
+                change = PdfLayoutChangeOperation.Change.DeleteGroups(listOf(1))
+            ).execute {}
+        }!!
+
+        assertEquals(listOf(listOf(200f, 201f), listOf(204f)), partWidths())
+        assertEquals(listOf("0001.pdf", "0003.pdf"), sourceDir().list()!!.sorted())
+        assertArrayEquals(untouched, File(sourceDir(), "0001.pdf").readBytes())
+        assertArrayEquals(intArrayOf(1, 2, 1), result.rotation)
+        assertEquals(2, pageCount(plp()))
+    }
+
+    @Test
+    fun anEmptyPageOnASourceInPartsGoesIntoTheLastPart() {
+        writeMarkedParts(2, 1)
+        val untouched = File(sourceDir(), "0001.pdf").readBytes()
+
+        runBlocking { operation(change = PdfLayoutChangeOperation.Change.AddEmptyPage).execute {} }!!
+
+        assertEquals(listOf(listOf(200f, 201f), listOf(202f, 200f)), partWidths())
+        assertArrayEquals(untouched, File(sourceDir(), "0001.pdf").readBytes())
+    }
+
+    @Test
+    fun aReorderOnASourceInPartsRewritesOnlyThePartsWithMovedPages() {
+        writeMarkedParts(2, 2, 1)
+        val untouched = File(sourceDir(), "0001.pdf").readBytes()
+
+        val result = runBlocking {
+            operation(
+                rotation = intArrayOf(0, 1, 2, 3, 0),
+                change = PdfLayoutChangeOperation.Change.Reorder(listOf(0, 2, 1))
+            ).execute {}
+        }!!
+
+        assertEquals(listOf(listOf(200f, 201f), listOf(204f, 202f), listOf(203f)), partWidths())
+        assertArrayEquals(untouched, File(sourceDir(), "0001.pdf").readBytes())
+        assertArrayEquals(intArrayOf(0, 1, 0, 2, 3), result.rotation)
+    }
+
+    private fun writeMarkedParts(vararg sizes: Int) {
+        sourceDir().mkdirs()
+        var index = 0
+        for ((part, size) in sizes.withIndex()) {
+            PdfDocument(PdfWriter(File(sourceDir(), "000${part + 1}.pdf"))).use { pdf ->
+                repeat(size) {
+                    val page = pdf.addNewPage(PageSize(200f + index++, 300f))
+                    PdfCanvas(page).rectangle(10.0, 10.0, 100.0, 100.0).fill().release()
+                }
+            }
+        }
+    }
+
+    private fun partWidths(): List<List<Float>> =
+        sourceDir().listFiles().orEmpty().sortedBy { it.name }.map { pageWidths(it) }
+
+    private fun sourceDir() = File(dir, "source_temp")
+
+    private fun source() = File(sourceDir(), "0001.pdf")
 
     private fun plp() = File(dir, "plp_temp.pdf")
 
     private fun writeSource(pages: Int) {
+        sourceDir().mkdirs()
         PdfDocument(PdfWriter(source())).use { pdf ->
             repeat(pages) {
                 val page = pdf.addNewPage(PageSize.A4)
@@ -426,6 +492,7 @@ class PdfLayoutChangeOperationTest {
     }
 
     private fun writeMarkedSource(pages: Int) {
+        sourceDir().mkdirs()
         PdfDocument(PdfWriter(source())).use { pdf ->
             repeat(pages) { index ->
                 val page = pdf.addNewPage(PageSize(200f + index, 300f))
@@ -454,10 +521,9 @@ class PdfLayoutChangeOperationTest {
     ) = PdfLayoutChangeOperation(
         files = PdfLayoutChangeOperation.Files(
             dir,
-            source(),
+            sourceDir(),
             plp(),
-            WorkFileBackup(dir, "source_temp.pdf", "plp_temp.pdf", "source_temp_copy.pdf", "plp_temp_copy.pdf"),
-            File(dir, "source_temp_work.pdf")
+            WorkFileBackup(dir, "source_temp", "plp_temp.pdf", "source_temp_copy", "plp_temp_copy.pdf")
         ),
         saveSelection = { events += "selection saved" },
         input = PdfLayoutChangeOperation.Input(

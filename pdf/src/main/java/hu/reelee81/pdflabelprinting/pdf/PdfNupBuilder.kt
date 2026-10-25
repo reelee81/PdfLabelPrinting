@@ -11,6 +11,8 @@ import hu.reelee81.pdflabelprinting.core.NupBox
 import hu.reelee81.pdflabelprinting.core.NupCellLayout
 import hu.reelee81.pdflabelprinting.core.NupConfig
 import hu.reelee81.pdflabelprinting.core.NupGeometry.DEFAULT_POSITION
+import hu.reelee81.pdflabelprinting.core.PageBatch
+import hu.reelee81.pdflabelprinting.core.PageSizes
 import hu.reelee81.pdflabelprinting.core.PdfCropRect
 import java.io.File
 import java.io.FileOutputStream
@@ -19,7 +21,7 @@ import kotlin.math.min
 object PdfNupBuilder {
     @Throws(Exception::class)
     fun build(
-        source: File,
+        source: PdfSourceParts,
         totalSrcPages: Int,
         outFile: File,
         workDir: File,
@@ -29,10 +31,15 @@ object PdfNupBuilder {
         crop: Map<Int, PdfCropRect>,
         batchSize: Int,
         progressStage: (Long) -> PdfProgress,
+        budget: Long = PdfBatchBudget.bytes(),
         warn: (message: String, error: Throwable) -> Unit = { _, _ -> }
-    ) {
+    ): PageSizes? {
         val writerProps = PdfIo.writerProperties()
-        var fitBounds: PdfMuPdfFitBounds? = null
+        val fitBounds = HashMap<Int, PdfMuPdfFitBounds?>()
+        val pageSizes = if (PdfPageSizes.isNeeded(config)) {
+            val (fallbackW, fallbackH) = PdfPageSizes.fallback(config)
+            PageSizes(FloatArray(totalSrcPages) { fallbackW }, FloatArray(totalSrcPages) { fallbackH })
+        } else null
 
         try {
 
@@ -47,16 +54,15 @@ object PdfNupBuilder {
             else PageSize.A4
 
             val per      = (rows * cols).coerceAtLeast(1)
-            val isPortraitMode = !land
-            val isSingleUp     = (per == 1)
 
             val totalOutPages = if (totalSrcPages == 0) 0 else (totalSrcPages + per - 1) / per
             if (totalOutPages == 0) {
                 FileOutputStream(outFile).use {
 
                 }
-                return
+                return pageSizes
             }
+            val sizeUnits = if (per == 1 && pageSizes != null) 1 else 0
             val progress = progressStage(
                 totalSrcPages.toLong() + totalOutPages + if (per == 1) totalSrcPages else 0
             )
@@ -67,20 +73,22 @@ object PdfNupBuilder {
             var chunkIndex = 0
             while (outPageStart < totalOutPages) {
 
-                val outPageEndInclusive = min(totalOutPages - 1, outPageStart + batchSize - 1)
-
                 val srcStart = outPageStart * per
-                val srcEnd   = min(totalSrcPages - 1, (outPageEndInclusive + 1) * per - 1)
 
                 val partFile = File((outFile.parentFile ?: workDir), outFile.name + ".p" + chunkIndex.toString())
 
-                if (scaleIndRequested && fitIndRequested) {
-                    fitBounds = runCatching { PdfMuPdfFitBounds(source.absolutePath) }
+                fun fitBoundsOf(page: Int): PdfMuPdfFitBounds? = fitBounds.getOrPut(source.layout.partOf(page)) {
+                    runCatching { PdfMuPdfFitBounds(source.locate(page).file.absolutePath) }
                         .onFailure { warn("MuPDF open failed", it) }
                         .getOrNull()
                 }
 
-                PdfDocument(PdfIo.reader(source.absolutePath)).use { src ->
+                val outPageEndInclusive = source.batch { src ->
+                    val outPageEnd = PageBatch.end(outPageStart, totalOutPages - 1, batchSize, budget) { out ->
+                        (out * per until min(totalSrcPages, (out + 1) * per)).sumOf { src.cost(it) }
+                    }
+                    val srcEnd = min(totalSrcPages - 1, (outPageEnd + 1) * per - 1)
+
                     PdfDocument(
                         PdfWriter(partFile.absolutePath, writerProps)
                     ).use { pdf ->
@@ -91,13 +99,20 @@ object PdfNupBuilder {
                         val editCells = ArrayList<PdfEditProjection.Cell>()
                         while (globalIdx <= srcEnd) {
                             val page1Based = globalIdx + 1
-                            val sp = src.getPage(page1Based)
+                            val sp = src.page(globalIdx)
+                            if (pageSizes != null) {
+                                runCatching {
+                                    val box = sp.cropBox ?: sp.mediaBox
+                                    pageSizes.widths[globalIdx] = box.width
+                                    pageSizes.heights[globalIdx] = box.height
+                                }
+                            }
                             val pageBox = PdfCopySupport.visibleBox(sp)
                             val sz = crop[globalIdx]?.applyTo(pageBox) ?: pageBox
 
                             val contentBox =
                                 if (scaleIndRequested && fitIndRequested) {
-                                    runCatching { fitBounds?.contentBox(globalIdx, sz) }
+                                    runCatching { fitBoundsOf(globalIdx)?.contentBox(source.layout.local(globalIdx), sz) }
                                         .onFailure { warn("Fit measurement failed on page $page1Based", it) }
                                         .getOrNull()
                                 } else {
@@ -105,10 +120,7 @@ object PdfNupBuilder {
                                 }
 
                             if (idxLocal % per == 0) {
-                                val psForThisPage =
-                                    if (isPortraitMode && isSingleUp) PageSize.A4
-                                    else basePs
-                                pdf.addNewPage(psForThisPage)
+                                pdf.addNewPage(basePs)
                             }
 
                             val currentPage = pdf.lastPage
@@ -156,13 +168,14 @@ object PdfNupBuilder {
 
                             idxLocal++
                             globalIdx++
-                            progress.advance(1)
+                            progress.advance(1 + sizeUnits)
                         }
                     }
+                    outPageEnd
                 }
 
-                fitBounds?.close()
-                fitBounds = null
+                for (fit in fitBounds.values) fit?.close()
+                fitBounds.clear()
 
                 partFiles += partFile
                 outPageStart = outPageEndInclusive + 1
@@ -179,11 +192,11 @@ object PdfNupBuilder {
 
                     var from = 1
                     while (from <= total) {
-                        val to = min(from + batchSize - 1, total)
-
-                        PdfDocument(PdfIo.reader(pf.absolutePath)).use { partDoc ->
-                            partDoc.copyPagesTo(from, to, destDoc)
+                        val to = PdfDocument(PdfIo.reader(pf.absolutePath)).use { partDoc ->
+                            val end = PdfPageCost.batchEnd(partDoc, from, total, batchSize, budget)
+                            partDoc.copyPagesTo(from, end, destDoc)
                             runCatching { PdfCopySupport.flushCopiedObjects(destDoc, partDoc) }
+                            end
                         }
 
                         val count = to - from + 1
@@ -200,9 +213,10 @@ object PdfNupBuilder {
             }
 
             partFiles.forEach { runCatching { it.delete() } }
+            return pageSizes
 
         } finally {
-            fitBounds?.let { runCatching { it.close() } }
+            for (fit in fitBounds.values) runCatching { fit?.close() }
         }
     }
 

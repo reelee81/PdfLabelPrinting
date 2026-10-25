@@ -64,15 +64,24 @@ class ThumbnailAdapter(
         2,
         3,
         3L, TimeUnit.SECONDS,
-        LinkedBlockingQueue(32),
-        ThreadPoolExecutor.DiscardOldestPolicy()
-    )
+        LinkedBlockingDeque(32)
+    ) { task, executor ->
+        if (!executor.isShutdown) {
+            executor.queue.poll()?.let { dropped ->
+                (dropped as? KeyedFutureTask)?.let { keyed ->
+                    keyed.cancel(true)
+                    inFlight.remove(keyed.key, keyed)
+                }
+            }
+            executor.execute(task)
+        }
+    }
 
     private val prefetchExecutor: ThreadPoolExecutor = ThreadPoolExecutor(
         2,
         2,
         0L, TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(16),
+        LinkedBlockingDeque(16),
         ThreadPoolExecutor.DiscardOldestPolicy()
     )
 
@@ -163,16 +172,6 @@ class ThumbnailAdapter(
         } catch (_: RejectedExecutionException) {
             runCatching { entry.renderer.close() }
         }
-    }
-
-    private fun executeBindLifo(task: KeyedFutureTask) {
-        bindExecutor.execute(task)
-        try {
-            val dq = bindExecutor.queue as? LinkedBlockingDeque<Runnable>
-            if (dq != null) {
-                if (dq.remove(task)) dq.addFirst(task)
-            }
-        } catch (_: Exception) {}
     }
 
     fun pausePrefetchAndCancel() {
@@ -391,7 +390,7 @@ class ThumbnailAdapter(
                 notifyThumbnailFinished(key)
             }
         }
-        executeBindLifo(task)
+        bindExecutor.execute(task)
         inFlight[key] = task
     }
 

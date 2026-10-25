@@ -8,6 +8,7 @@ import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Page
 import com.artifex.mupdf.fitz.Pixmap
 import com.artifex.mupdf.fitz.Rect
+import com.itextpdf.kernel.pdf.PdfDocument
 import hu.reelee81.pdflabelprinting.core.SignatureGeometry
 import hu.reelee81.pdflabelprinting.core.SignedPageEffects
 import java.io.File
@@ -16,24 +17,30 @@ class MuPdfSignedPageRenderer(
     private val warn: (message: String, error: Throwable) -> Unit = { _, _ -> }
 ) : SignedPageRenderer {
     override fun open(layout: File): SignedPageRenderer.Pages {
-        val path = layout.absolutePath
-        val count = withDocument(path) { it.countPages() }
-        return Pages(path, count)
+        val count = PdfDocument(PdfIo.reader(layout.absolutePath)).use { it.numberOfPages }
+        return Pages(layout, count)
     }
 
     private inner class Pages(
-        private val path: String,
+        private val layout: File,
         override val pageCount: Int
     ) : SignedPageRenderer.Pages {
-        override fun render(pageIndex: Int, signature: SignedPageRenderer.Signature): SignedPageRenderer.RgbImage? =
-            withDocument(path) { document ->
-                val page = document.loadPage(pageIndex)
-                try {
-                    renderPage(page, pageIndex, signature)
-                } finally {
-                    page.destroy()
+        override fun render(pageIndex: Int, signature: SignedPageRenderer.Signature): SignedPageRenderer.RgbImage? {
+            val single = File(layout.absoluteFile.parentFile, "${layout.name}.page.pdf")
+            try {
+                PdfPageExtract.write(layout, pageIndex + 1, single)
+                return withDocument(single.absolutePath) { document ->
+                    val page = document.loadPage(0)
+                    try {
+                        renderPage(page, pageIndex, signature)
+                    } finally {
+                        page.destroy()
+                    }
                 }
+            } finally {
+                single.delete()
             }
+        }
 
         override fun close() {}
     }

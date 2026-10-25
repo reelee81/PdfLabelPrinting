@@ -594,7 +594,6 @@ class PdfRotationInstrumentedTest {
                         rotated
                     }
                     awaitNavigation(scenario)
-                    // Let orientation layout and the old auto-hide animation finish.
                     SystemClock.sleep(1800)
                     scenario.onActivity { activity ->
                         val view = findPdfView(activity)

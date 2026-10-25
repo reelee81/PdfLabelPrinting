@@ -1,21 +1,34 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+-keepattributes SourceFile,LineNumberTable
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+-dontwarn org.w3c.dom.DOMImplementationSourceList
+-dontwarn org.xml.sax.driver
+-dontwarn sharpen.config.MappingConfiguration
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+-keep class com.artifex.mupdf.fitz.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+-keep class com.itextpdf.bouncycastle.BouncyCastleFactory { public <init>(); }
+-keepnames class * extends com.itextpdf.commons.actions.AbstractITextEvent
+-keep class com.itextpdf.kernel.utils.RegisterDefaultDiContainer { *; }
+-keep class com.itextpdf.forms.util.RegisterDefaultDiContainer { *; }
+-keep class com.itextpdf.layout.utils.RegisterDefaultDiContainer { *; }
+
+-keepnames class androidx.pdf.viewer.fragment.PdfViewerFragment
+
+-keep class org.apache.xerces.dom.CoreDocumentImpl { <init>(...); }
+-keep class org.apache.xerces.dom.DocumentImpl { <init>(...); }
+-keep class org.apache.xerces.dom.PSVIDocumentImpl { <init>(...); }
+-keep class org.apache.xerces.impl.dtd.XML11DTDProcessor { <init>(...); }
+-keep class org.apache.xerces.impl.dtd.XML11DTDValidator { <init>(...); }
+-keep class org.apache.xerces.impl.dtd.XMLDTDLoader { <init>(...); }
+-keep class org.apache.xerces.impl.dtd.XMLDTDValidator { <init>(...); }
+-keep class org.apache.xerces.impl.dv.dtd.DTDDVFactoryImpl { <init>(...); }
+-keep class org.apache.xerces.impl.dv.dtd.XML11DTDDVFactoryImpl { <init>(...); }
+-keep class org.apache.xerces.impl.dv.xs.ExtendedSchemaDVFactoryImpl { <init>(...); }
+-keep class org.apache.xerces.impl.dv.xs.SchemaDVFactoryImpl { <init>(...); }
+-keep class org.apache.xerces.impl.xs.XMLSchemaLoader { <init>(...); }
+-keep class org.apache.xerces.impl.xs.XMLSchemaValidator { <init>(...); }
+-keep class org.apache.xerces.impl.xs.XSMessageFormatter { <init>(...); }
+-keep class org.apache.xerces.parsers.XIncludeAwareParserConfiguration { <init>(...); }
+-keep class org.apache.xerces.parsers.XIncludeParserConfiguration { <init>(...); }
+-keep class org.apache.xerces.parsers.XML11DTDConfiguration { <init>(...); }
+-keep class org.apache.xerces.parsers.XPointerParserConfiguration { <init>(...); }

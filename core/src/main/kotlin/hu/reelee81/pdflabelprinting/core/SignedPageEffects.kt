@@ -16,14 +16,15 @@ object SignedPageEffects {
 
     fun grayscale(rgb: ByteArray) {
         val m = saturation(0f)
+        val lr = products(m[0])
+        val lg = products(m[1])
+        val lb = products(m[2])
         var i = 0
         while (i + 2 < rgb.size) {
-            val r = u(rgb[i])
-            val g = u(rgb[i + 1])
-            val b = u(rgb[i + 2])
-            rgb[i] = channel(m[0] * r + m[1] * g + m[2] * b).toByte()
-            rgb[i + 1] = channel(m[3] * r + m[4] * g + m[5] * b).toByte()
-            rgb[i + 2] = channel(m[6] * r + m[7] * g + m[8] * b).toByte()
+            val gray = channel(lr[u(rgb[i])] + lg[u(rgb[i + 1])] + lb[u(rgb[i + 2])]).toByte()
+            rgb[i] = gray
+            rgb[i + 1] = gray
+            rgb[i + 2] = gray
             i += 3
         }
     }
@@ -36,15 +37,23 @@ object SignedPageEffects {
 
     fun scanColors(rgb: ByteArray) {
         val m = saturation(SCAN_SATURATION)
+        val rr = products(m[0])
+        val rg = products(m[1])
+        val rb = products(m[2])
+        val gr = products(m[3])
+        val gg = products(m[4])
+        val gb = products(m[5])
+        val br = products(m[6])
+        val bg = products(m[7])
+        val bb = products(m[8])
         var i = 0
         while (i + 2 < rgb.size) {
             val r = u(rgb[i])
             val g = u(rgb[i + 1])
             val b = u(rgb[i + 2])
-            for (c in 0 until 3) {
-                val base = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b
-                rgb[i + c] = channel(SCAN_CONTRAST * base + SCAN_BRIGHTNESS).toByte()
-            }
+            rgb[i] = scanChannel(rr[r] + rg[g] + rb[b])
+            rgb[i + 1] = scanChannel(gr[r] + gg[g] + gb[b])
+            rgb[i + 2] = scanChannel(br[r] + bg[g] + bb[b])
             i += 3
         }
     }
@@ -53,15 +62,23 @@ object SignedPageEffects {
         require(width > 0 && height > 0 && rgb.size >= width * height * 3)
         val vertical = edgeFactors(height)
         val horizontal = edgeFactors(width)
+        val columns = ByteArray(width * LEVELS)
+        for (x in 0 until width) {
+            val fx = horizontal[x]
+            val base = x * LEVELS
+            for (v in 0 until LEVELS) columns[base + v] = channel(v * fx).toByte()
+        }
+        val row = IntArray(LEVELS)
         var i = 0
         for (y in 0 until height) {
             val fy = vertical[y]
-            for (x in 0 until width) {
-                val fx = horizontal[x]
-                for (c in 0 until 3) {
-                    val shadedY = channel(u(rgb[i + c]) * fy)
-                    rgb[i + c] = channel(shadedY * fx).toByte()
-                }
+            for (v in 0 until LEVELS) row[v] = channel(v * fy)
+            var base = 0
+            repeat(width) {
+                rgb[i] = columns[base + row[u(rgb[i])]]
+                rgb[i + 1] = columns[base + row[u(rgb[i + 1])]]
+                rgb[i + 2] = columns[base + row[u(rgb[i + 2])]]
+                base += LEVELS
                 i += 3
             }
         }
@@ -124,6 +141,12 @@ object SignedPageEffects {
             }
         }
     }
+
+    private const val LEVELS = 256
+
+    private fun products(factor: Float): FloatArray = FloatArray(LEVELS) { factor * it }
+
+    private fun scanChannel(base: Float): Byte = channel(SCAN_CONTRAST * base + SCAN_BRIGHTNESS).toByte()
 
     private fun pixelEdge(v: Float): Int = floor(v + 0.5f).toInt()
 

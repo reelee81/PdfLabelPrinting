@@ -60,7 +60,7 @@ class PdfSignOperationTest {
         assertEquals(listOf(0, 2), renderer.rendered)
         assertTrue(renderer.closed)
         assertEquals(listOf("selection saved"), events)
-        assertEquals(5, pageCount(File(dir, "source_temp_copy.pdf")))
+        assertEquals(5, pageCount(File(dir, "source_temp_copy/0001.pdf")))
         assertTrue(dir.listFiles().orEmpty().none { it.name.startsWith("signed_") })
     }
 
@@ -119,7 +119,7 @@ class PdfSignOperationTest {
         runBlocking { operation.restoreIfBackedUp() }
         assertEquals(listOf(200f, 201f, 202f, 203f, 204f), pageWidths(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
     }
 
@@ -135,7 +135,7 @@ class PdfSignOperationTest {
         assertNotNull(failure)
         assertEquals(listOf(200f, 201f, 202f, 203f, 204f), pageWidths(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
         assertTrue(dir.listFiles().orEmpty().none { it.name.startsWith("signed_") })
 
@@ -143,6 +143,44 @@ class PdfSignOperationTest {
         assertEquals(listOf(200f, 201f, 202f, 203f, 204f), pageWidths(source()))
         assertEquals("old layout", plp().readText())
     }
+
+    @Test
+    fun aSignedGroupInsideOnePartRewritesOnlyThatPart() {
+        writeMarkedParts(2, 2, 1)
+        val untouched = listOf("0001.pdf", "0003.pdf").associateWith { File(sourceDir(), it).readBytes() }
+
+        val result = runBlocking { operation(FakeRenderer(pageCount = 3), plpIndices = listOf(1), rotation = intArrayOf(1, 2, 3, 0, 1)).execute {} }
+
+        assertEquals(listOf(listOf(200f, 201f), listOf(PageSize.A4.height), listOf(204f)), partWidths())
+        for ((name, bytes) in untouched) assertArrayEquals(name, bytes, File(sourceDir(), name).readBytes())
+        assertArrayEquals(intArrayOf(1, 2, 0, 1), result.rotation)
+        assertEquals(2, pageCount(plp()))
+    }
+
+    @Test
+    fun aSignedGroupAcrossAPartBoundaryLeavesItsOtherPageOutOfTheNextPart() {
+        writeMarkedParts(3, 2)
+
+        runBlocking { operation(FakeRenderer(pageCount = 3), plpIndices = listOf(1)).execute {} }
+
+        assertEquals(listOf(listOf(200f, 201f, PageSize.A4.height), listOf(204f)), partWidths())
+    }
+
+    private fun writeMarkedParts(vararg sizes: Int) {
+        sourceDir().mkdirs()
+        var index = 0
+        for ((part, size) in sizes.withIndex()) {
+            PdfDocument(PdfWriter(File(sourceDir(), "000${part + 1}.pdf"))).use { pdf ->
+                repeat(size) {
+                    val page = pdf.addNewPage(PageSize(200f + index++, 300f))
+                    PdfCanvas(page).rectangle(10.0, 10.0, 100.0, 100.0).fill().release()
+                }
+            }
+        }
+    }
+
+    private fun partWidths(): List<List<Float>> =
+        sourceDir().listFiles().orEmpty().sortedBy { it.name }.map { pageWidths(it) }
 
     private class FakeRenderer(
         private val pageCount: Int,
@@ -171,11 +209,14 @@ class PdfSignOperationTest {
         }
     }
 
-    private fun source() = File(dir, "source_temp.pdf")
+    private fun sourceDir() = File(dir, "source_temp")
+
+    private fun source() = File(sourceDir(), "0001.pdf")
 
     private fun plp() = File(dir, "plp_temp.pdf")
 
     private fun writeMarkedSource(pages: Int) {
+        sourceDir().mkdirs()
         PdfDocument(PdfWriter(source())).use { pdf ->
             repeat(pages) { index ->
                 val page = pdf.addNewPage(PageSize(200f + index, 300f))
@@ -202,10 +243,9 @@ class PdfSignOperationTest {
     ) = PdfSignOperation(
         files = PdfLayoutChangeOperation.Files(
             dir,
-            source(),
+            sourceDir(),
             plp(),
-            WorkFileBackup(dir, "source_temp.pdf", "plp_temp.pdf", "source_temp_copy.pdf", "plp_temp_copy.pdf"),
-            File(dir, "source_temp_work.pdf")
+            WorkFileBackup(dir, "source_temp", "plp_temp.pdf", "source_temp_copy", "plp_temp_copy.pdf")
         ),
         saveSelection = { events += "selection saved" },
         input = PdfSignOperation.Input(

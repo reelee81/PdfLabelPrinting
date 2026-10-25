@@ -21,6 +21,7 @@ import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.kernel.pdf.canvas.PdfCanvas
 import com.itextpdf.kernel.pdf.canvas.parser.util.PdfCanvasParser
 import com.itextpdf.kernel.pdf.xobject.PdfFormXObject
+import hu.reelee81.pdflabelprinting.core.SourcePartPlan
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
@@ -132,6 +133,7 @@ object PdfEditProjection {
         pages: Set<Int>?,
         batchSize: Int,
         onProgress: (Int) -> Unit = {},
+        budget: Long = PdfBatchBudget.bytes(),
         ensureActive: () -> Unit
     ): Int {
         val total = PdfDocument(open().setMemorySavingMode(true)).use { it.numberOfPages }
@@ -142,10 +144,10 @@ object PdfEditProjection {
             var from = 1
             while (from <= total) {
                 ensureActive()
-                val to = min(from + batch - 1, total)
-                PdfDocument(open().setMemorySavingMode(true)).use { src ->
-                    src.copyPagesTo(from, to, destination)
-                    for (number in from..to) {
+                val to = PdfDocument(open().setMemorySavingMode(true)).use { src ->
+                    val end = PdfPageCost.batchEnd(src, from, total, batch, budget)
+                    src.copyPagesTo(from, end, destination)
+                    for (number in from..end) {
                         if (pages != null && number !in pages) continue
                         val page = destination.getPage(number)
                         appendedFrom(page)?.let { streams ->
@@ -161,6 +163,7 @@ object PdfEditProjection {
                         }
                     }
                     destination.flushCopiedObjects(src)
+                    end
                 }
                 for (number in from..to) destination.getPage(number).flush()
                 onProgress(to - from + 1)
@@ -172,14 +175,16 @@ object PdfEditProjection {
 
     private class Edit(val plpIndex: Int, val matrix: DoubleArray)
 
+    class Projection(val changed: Int, val source: PdfSourceParts)
+
     fun project(
-        source: File,
+        source: PdfSourceParts,
         editedPlp: File,
-        output: File,
         batchSize: Int,
         onProgress: (Int) -> Unit = {},
+        writeStage: (Long) -> PdfProgress,
         ensureActive: () -> Unit
-    ): Int {
+    ): Projection {
         val bySource = HashMap<Int, MutableList<Edit>>()
         val removals = HashSet<Int>()
         val plpPages = PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { it.numberOfPages }
@@ -218,43 +223,38 @@ object PdfEditProjection {
             onProgress(to - from + 1)
             from = to + 1
         }
-        if (bySource.isEmpty() && removals.isEmpty()) return 0
+        if (bySource.isEmpty() && removals.isEmpty()) return Projection(0, source)
 
-        val sourcePages = PdfDocument(PdfReader(source).setMemorySavingMode(true)).use { it.numberOfPages }
-        if ((bySource.keys + removals).any { it !in 0 until sourcePages }) {
+        val changed = bySource.keys + removals
+        if (changed.any { it !in 0 until source.total }) {
             throw NotProjectableException("layout record does not match the source")
         }
-        PdfDocument(PdfWriter(output.absolutePath, PdfIo.writerProperties())).use { destination ->
-            destination.setFlushUnusedObjects(true)
-            var start = 1
-            while (start <= sourcePages) {
-                ensureActive()
-                val end = min(start + batch - 1, sourcePages)
-                PdfDocument(PdfReader(source).setMemorySavingMode(true)).use { src ->
-                    src.copyPagesTo(start, end, destination)
-                    for (pageNumber in start..end) {
-                        if (pageNumber - 1 in removals) removeLayer(destination.getPage(pageNumber))
-                    }
-                    val affected = (start..end).filter { bySource.containsKey(it - 1) }
-                    if (affected.isNotEmpty()) {
-                        PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { plp ->
-                            for (pageNumber in affected) {
-                                val target = destination.getPage(pageNumber)
-                                for (edit in bySource.getValue(pageNumber - 1)) {
-                                    appendEdit(target, plp.getPage(edit.plpIndex), edit.matrix)
-                                }
-                            }
-                            destination.flushCopiedObjects(plp)
+        val plan = SourcePartPlan.rewritePages(source.layout, changed)
+        val written = source.write(
+            plan,
+            batch,
+            writeStage(plan.writtenPages.toLong()),
+            openPart = { PdfReader(it).setMemorySavingMode(true) }
+        ) { first, last, destination ->
+            ensureActive()
+            val firstNumber = destination.numberOfPages - (last - first)
+            for (page in first..last) {
+                if (page in removals) removeLayer(destination.getPage(firstNumber + page - first))
+            }
+            val affected = (first..last).filter { bySource.containsKey(it) }
+            if (affected.isNotEmpty()) {
+                PdfDocument(PdfReader(editedPlp).setMemorySavingMode(true)).use { plp ->
+                    for (page in affected) {
+                        val target = destination.getPage(firstNumber + page - first)
+                        for (edit in bySource.getValue(page)) {
+                            appendEdit(target, plp.getPage(edit.plpIndex), edit.matrix)
                         }
                     }
-                    PdfCopySupport.flushCopiedObjects(destination, src)
+                    destination.flushCopiedObjects(plp)
                 }
-                for (pageNumber in start..end) destination.getPage(pageNumber).flush()
-                onProgress(end - start + 1)
-                start = end + 1
             }
         }
-        return (bySource.keys + removals).size
+        return Projection(changed.size, written)
     }
 
     private fun appendedFrom(page: PdfPage): Int? {

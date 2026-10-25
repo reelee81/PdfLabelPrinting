@@ -227,6 +227,7 @@ class PdfEditorActivity : PdfActivity() {
 
     override fun onPdfNavigationStateChanged(inProgress: Boolean) {
         if (!supportsPdfEditing() || !::fragment.isInitialized) return
+        if (isPdfWaitOverlayDeferred()) return
         val ready = documentLoaded && !inProgress && !saving && eraseJob == null && !fragment.isApplyEditsInProgress
         saveButton?.isEnabled = ready
         for (button in eraseButtons) {

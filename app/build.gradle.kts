@@ -29,19 +29,26 @@ android {
         applicationId = "hu.reelee81.pdflabelprinting"
         minSdk = 24
         targetSdk = 37
-        versionCode = 34
-        versionName = "34.0"
+        versionCode = 35
+        versionName = "35.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        create("r8check") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".r8check"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -64,6 +71,16 @@ android {
     bundle {
         language {
             enableSplit = false
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/services/org.w3c.dom.DOMImplementationSourceList",
+                "META-INF/services/org.xml.sax.driver",
+                "META-INF/services/sharpen.config.MappingConfiguration"
+            )
         }
     }
 }

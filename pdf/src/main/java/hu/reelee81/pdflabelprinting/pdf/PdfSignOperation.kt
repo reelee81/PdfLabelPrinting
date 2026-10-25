@@ -18,7 +18,9 @@ import hu.reelee81.pdflabelprinting.core.ProgressNotifyPacing
 import hu.reelee81.pdflabelprinting.core.ProgressTicker
 import hu.reelee81.pdflabelprinting.core.SignatureGeometry
 import hu.reelee81.pdflabelprinting.core.SourcePageArrays
+import hu.reelee81.pdflabelprinting.core.SourcePartPlan
 import java.io.File
+import java.io.FileNotFoundException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
@@ -71,32 +73,35 @@ class PdfSignOperation(
                 backedUp = true
 
                 try {
-                    val total = PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages }
+                    if (!PdfSourceParts.exists(files.sourceDir)) {
+                        throw FileNotFoundException(files.sourceDir.path)
+                    }
+                    val original = PdfSourceParts.open(files.sourceDir)
+                    val total = original.total
                     val per = (input.config.rows * input.config.cols).coerceAtLeast(1)
                     val signedPageWeight = ProgressMath.signedPageWeight(
                         highDpi = input.highDpi,
                         scanEffect = input.signature.scanEffect,
                         grayscale = input.signature.grayscale
                     )
+                    val expected = SourcePartPlan.replaceGroups(original.layout, input.perGroup, input.plpIndices.toSet())
                     val stage = tracker.stage(
-                        input.plpIndices.size.toLong() * signedPageWeight + total + ProgressMath.layoutUnits(total, per)
+                        input.plpIndices.size.toLong() * signedPageWeight + expected.writtenPages + ProgressMath.layoutUnits(total, per)
                     )
 
                     renderSignedPages(signed, stage, signedPageWeight)
 
-                    PdfSourceRewrite.writeReplacingGroups(
-                        files.source,
-                        files.sourceWork,
-                        total,
-                        input.perGroup,
-                        signed,
+                    val plan = SourcePartPlan.replaceGroups(original.layout, input.perGroup, signed.keys)
+                    val source = original.write(
+                        plan,
                         input.batchSize,
-                        tracker.stage(total + ProgressMath.layoutUnits(total, per))
+                        tracker.stage(plan.writtenPages + ProgressMath.layoutUnits(total, per)),
+                        PdfSourceParts.Inputs(replacements = signed)
                     )
 
                     val signedStarts = signed.keys.map { it * input.perGroup }.filter { it < total }
                     val merged = PdfSignedGroups.mergedIndices(signedStarts, input.perGroup, total)
-                    val newTotal = PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages }
+                    val newTotal = source.total
 
                     val crops = PdfCrops.afterRemoval(PdfCrops.withCrop(input.crops, signedStarts, null), merged)
                     val rotation = SourcePageArrays.rotationsSized(
@@ -114,8 +119,8 @@ class PdfSignOperation(
 
                     val work = File(files.workDir, "${files.plp.name}.part")
                     if (work.exists()) work.delete()
-                    PdfNupBuilder.build(
-                        source = files.source,
+                    val pageSizes = PdfNupBuilder.build(
+                        source = source,
                         totalSrcPages = newTotal,
                         outFile = work,
                         workDir = files.workDir,
@@ -129,8 +134,6 @@ class PdfSignOperation(
                     )
                     if (files.plp.exists()) files.plp.delete()
                     work.renameTo(files.plp)
-
-                    val pageSizes = PdfPageSizes.forThumbnails(files.source, newTotal, input.config, input.batchSize, tracker::stage)
 
                     PdfLayoutChangeOperation.Result(
                         crops, rotation, position, input.defaultPosition, input.config,

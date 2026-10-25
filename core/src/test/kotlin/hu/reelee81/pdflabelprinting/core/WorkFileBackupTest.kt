@@ -71,6 +71,33 @@ class WorkFileBackupTest {
     }
 
     @Test
+    fun aSourceFolderIsBackedUpAndRestoredWithAllItsParts() {
+        val dir = temp.newFolder()
+        val source = File(dir, "source").apply { mkdirs() }
+        File(source, "0001.pdf").writeText("first")
+        File(source, "0002.pdf").writeText("second")
+        File(dir, "plp.pdf").writeText("plp")
+        File(dir, "source_copy").apply { mkdirs() }.resolve("0009.pdf").writeText("an older copy")
+        val backup = WorkFileBackup(dir, "source", "plp.pdf", "source_copy", "plp_copy.pdf")
+
+        backup.backup()
+        assertEquals(setOf("0001.pdf", "0002.pdf"), File(dir, "source_copy").list()!!.toSet())
+
+        File(source, "0002.pdf").writeText("half written")
+        File(source, "0003.pdf").writeText("new part")
+        File(source, "0003.pdf.work").writeText("work")
+        File(dir, "other").apply { mkdirs() }.resolve("kept.tmp").writeText("other")
+
+        assertTrue(backup.restore())
+
+        assertEquals(setOf("source", "plp.pdf", "other"), dir.list()!!.toSet())
+        assertEquals(setOf("0001.pdf", "0002.pdf"), source.list()!!.toSet())
+        assertEquals("first", File(source, "0001.pdf").readText())
+        assertEquals("second", File(source, "0002.pdf").readText())
+        assertEquals("plp", File(dir, "plp.pdf").readText())
+    }
+
+    @Test
     fun aRestoreWithoutCopiesEmptiesTheFolder() {
         val dir = temp.newFolder()
         File(dir, "source.pdf").writeText("source")

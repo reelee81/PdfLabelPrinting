@@ -57,10 +57,9 @@ class PdfViewerEditOperationTest {
         assertArrayEquals(intArrayOf(9, 5, 5), result.position)
         assertEquals(crops, result.crops)
         assertEquals(listOf(1), result.selected)
-        assertEquals(3, pageCount(File(dir, "source_temp_copy.pdf")))
+        assertEquals(3, pageCount(File(dir, "source_temp_copy/0001.pdf")))
         assertEquals(3, pageCount(File(dir, "plp_temp_copy.pdf")))
         assertFalse(File(dir, "plp_temp.pdf.edited").exists())
-        assertFalse(File(dir, "source_temp.pdf.edited").exists())
         assertFalse(edited.exists())
         assertEquals(listOf("selection saved"), events)
     }
@@ -124,7 +123,7 @@ class PdfViewerEditOperationTest {
         assertEquals("no input", failure?.message)
         assertEquals(3, pageCount(source()))
         assertEquals("old layout", plp().readText())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
 
         runBlocking { operation.restoreIfBackedUp() }
@@ -146,11 +145,14 @@ class PdfViewerEditOperationTest {
         assertEquals(3, pageCount(source()))
     }
 
-    private fun source() = File(dir, "source_temp.pdf")
+    private fun sourceDir() = File(dir, "source_temp")
+
+    private fun source() = File(sourceDir(), "0001.pdf")
 
     private fun plp() = File(dir, "plp_temp.pdf")
 
     private fun writeMarked(file: File, pages: Int) {
+        file.parentFile?.mkdirs()
         PdfDocument(PdfWriter(file)).use { pdf ->
             repeat(pages) { index ->
                 val page = pdf.addNewPage(PageSize(200f + index, 300f))
@@ -162,7 +164,7 @@ class PdfViewerEditOperationTest {
     private fun buildLayout(out: File, layoutConfig: NupConfig) {
         val total = pageCount(source())
         PdfNupBuilder.build(
-            source = source(),
+            source = PdfSourceParts.open(sourceDir()),
             totalSrcPages = total,
             outFile = out,
             workDir = dir,
@@ -200,10 +202,9 @@ class PdfViewerEditOperationTest {
     ) = PdfViewerEditOperation(
         files = PdfLayoutChangeOperation.Files(
             dir,
-            source(),
+            sourceDir(),
             plp(),
-            WorkFileBackup(dir, "source_temp.pdf", "plp_temp.pdf", "source_temp_copy.pdf", "plp_temp_copy.pdf"),
-            File(dir, "source_temp_work.pdf")
+            WorkFileBackup(dir, "source_temp", "plp_temp.pdf", "source_temp_copy", "plp_temp_copy.pdf")
         ),
         saveSelection = { events += "selection saved" },
         input = PdfViewerEditOperation.Input(
@@ -217,7 +218,6 @@ class PdfViewerEditOperationTest {
             selected = listOf(1)
         ),
         progress = PdfLayoutChangeOperation.Progress({ 0L }, tickMs = 500L, idleMs = 1_000L),
-        copyEdited = copyEdited,
-        missingSourceMessage = "missing source"
+        copyEdited = copyEdited
     )
 }

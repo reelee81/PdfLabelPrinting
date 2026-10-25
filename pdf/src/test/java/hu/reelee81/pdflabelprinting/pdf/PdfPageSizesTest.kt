@@ -78,6 +78,23 @@ class PdfPageSizesTest {
     }
 
     @Test
+    fun theSizesAreReadAcrossThePartsOfTheSource() {
+        val source = writeSource(
+            listOf(Rectangle(100f, 200f), Rectangle(300f, 400f), Rectangle(500f, 600f), Rectangle(700f, 800f), Rectangle(90f, 80f)),
+            cropBoxOf = mapOf(3 to Rectangle(10f, 10f, 150f, 250f)),
+            partPages = 2
+        )
+        val progress = RecordingProgress()
+
+        val sizes = PdfPageSizes.read(source, 6, 3, 1f, 2f, progress)
+
+        assertEquals(3, source.layout.parts)
+        assertArrayEquals(floatArrayOf(100f, 300f, 500f, 150f, 90f, 1f), sizes.widths, 0f)
+        assertArrayEquals(floatArrayOf(200f, 400f, 600f, 250f, 80f, 2f), sizes.heights, 0f)
+        assertEquals(listOf("advance 3", "advance 3", "idle"), progress.events)
+    }
+
+    @Test
     fun forThumbnailsReadsOnlyForASingleUpLayout() {
         val source = writeSource(listOf(Rectangle(100f, 200f), Rectangle(300f, 400f)))
         val stages = mutableListOf<Long>()
@@ -93,14 +110,16 @@ class PdfPageSizesTest {
         assertEquals(listOf("advance 2", "idle"), progress.events)
     }
 
-    private fun writeSource(pages: List<Rectangle>, cropBoxOf: Map<Int, Rectangle> = emptyMap()): File {
-        val file = File(temp.newFolder(), "source.pdf")
-        PdfDocument(PdfWriter(file)).use { pdf ->
-            pages.forEachIndexed { index, size ->
-                val page = pdf.addNewPage(PageSize(size))
-                cropBoxOf[index]?.let { page.setCropBox(it) }
+    private fun writeSource(pages: List<Rectangle>, cropBoxOf: Map<Int, Rectangle> = emptyMap(), partPages: Int = pages.size): PdfSourceParts {
+        val dir = temp.newFolder()
+        for ((part, chunk) in pages.indices.chunked(partPages).withIndex()) {
+            PdfDocument(PdfWriter(File(dir, "${part + 1}".padStart(4, '0') + ".pdf"))).use { pdf ->
+                for (index in chunk) {
+                    val page = pdf.addNewPage(PageSize(pages[index]))
+                    cropBoxOf[index]?.let { page.setCropBox(it) }
+                }
             }
         }
-        return file
+        return PdfSourceParts.open(dir)
     }
 }

@@ -161,6 +161,42 @@ files and where to get them. Without them these tests are skipped. The tests wri
 `work/00_test_PDFs_work`. Both folders are described in their own README, and the files placed in them are never
 committed.
 
+### Release build and the R8 smoke test
+
+The release build is shrunk and obfuscated with R8. iText, Xerces and MuPDF load some of their own classes by
+name, which R8 cannot see; the rules in `app/proguard-rules.pro` keep exactly these classes. A broken rule does not
+fail the build, it only shows up on the device (for example a PDF that no longer opens), so the shrunk app has to be
+tested after every library or Android Gradle Plugin update and before every release.
+
+For this the project has an `r8check` build type: the same shrunk build as the release, signed with the debug key and
+installed as a separate app (“PLP R8 test”, in Hungarian “PLP R8 próba”; `hu.reelee81.pdflabelprinting.r8check`)
+next to the normal one.
+It contains a hidden smoke test screen (`app/src/r8check`) that runs the PDF engine without the user interface:
+it imports every PDF from its input folder, then rebuilds the layout (with Scale and Fit), crops, rotates, positions,
+adds an empty page, reorders, deletes, signs (MuPDF) and saves with and without a password, and checks that
+cancelling an import restores the previous state.
+
+```bash
+./gradlew :app:installR8check
+
+# optional: your own test PDFs (any subfolders); without them only the generated test files are used
+adb shell mkdir -p /sdcard/Android/data/hu.reelee81.pdflabelprinting.r8check/files/r8smoke
+adb push work/00_test_PDFs/. /sdcard/Android/data/hu.reelee81.pdflabelprinting.r8check/files/r8smoke/
+
+# run everything, or only the cancel check with: -e only cancel
+adb shell am start -n hu.reelee81.pdflabelprinting.r8check/hu.reelee81.pdflabelprinting.R8SmokeActivity
+
+# result: one OK / FAIL / SKIP line per step, and a DONE summary at the end
+adb logcat -d -s PlpR8Smoke
+adb pull /sdcard/Android/data/hu.reelee81.pdflabelprinting.r8check/files/r8smoke/result.txt
+```
+
+Keep the phone on the smoke test screen until the `DONE` line appears; with many large PDFs this can take a while.
+Password-protected PDFs are skipped. A `FAIL` line with a message like “not found”, `ClassNotFoundException`,
+`NoSuchMethodError` or a `NullPointerException` deep inside a library usually means a missing keep rule;
+the obfuscated class names in the log can be looked up in `app/build/outputs/mapping/r8check/mapping.txt`.
+Files that are broken on purpose fail in the normal debug build as well.
+
 
 ## License
 

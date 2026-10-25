@@ -11,7 +11,12 @@ enum class PdfOperationKind {
     REORDER,
     IMPORT,
     VIEWER_EDIT,
-    SIGN
+    SIGN,
+    PRINT,
+    SEND,
+    OPEN,
+    SAVE_EXPORT,
+    SAVE_WRITE
 }
 
 data class PdfOperationRequest(

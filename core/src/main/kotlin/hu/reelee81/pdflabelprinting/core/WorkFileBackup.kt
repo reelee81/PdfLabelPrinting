@@ -18,23 +18,11 @@ class WorkFileBackup(
 
     fun backup() {
         if (source.exists()) {
-            runCatching {
-                FileInputStream(source).use { input ->
-                    FileOutputStream(sourceCopy, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
+            runCatching { copy(source, sourceCopy) }
         }
 
         if (plp.exists()) {
-            runCatching {
-                FileInputStream(plp).use { input ->
-                    FileOutputStream(plpCopy, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
+            runCatching { copy(plp, plpCopy) }
         }
     }
 
@@ -43,36 +31,37 @@ class WorkFileBackup(
 
         dir.listFiles()?.forEach { f ->
             if (f != sourceCopy && f != plpCopy) {
-                runCatching { f.delete() }
+                runCatching { if (f == source || f == plp) f.deleteRecursively() else f.delete() }
             }
         }
 
         if (sourceCopy.exists()) {
-            runCatching {
-                FileInputStream(sourceCopy).use { input ->
-                    FileOutputStream(source, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
+            runCatching { copy(sourceCopy, source) }
 
-            runCatching { sourceCopy.delete() }
+            runCatching { sourceCopy.deleteRecursively() }
         }
 
         if (plpCopy.exists()) {
-            runCatching {
-                FileInputStream(plpCopy).use { input ->
-                    FileOutputStream(plp, false).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }.onSuccess {
+            runCatching { copy(plpCopy, plp) }.onSuccess {
                 restoredPlpBackup = true
             }
 
-            runCatching { plpCopy.delete() }
+            runCatching { plpCopy.deleteRecursively() }
         }
 
         return restoredPlpBackup
+    }
+
+    private fun copy(from: File, to: File) {
+        if (from.isDirectory) {
+            to.deleteRecursively()
+            check(from.copyRecursively(to)) { "Could not copy ${from.name}" }
+            return
+        }
+        FileInputStream(from).use { input ->
+            FileOutputStream(to, false).use { output ->
+                input.copyTo(output)
+            }
+        }
     }
 }

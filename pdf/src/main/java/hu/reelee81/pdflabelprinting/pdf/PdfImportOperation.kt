@@ -2,7 +2,6 @@ package hu.reelee81.pdflabelprinting.pdf
 
 import com.itextpdf.kernel.exceptions.BadPasswordException
 import com.itextpdf.kernel.pdf.PdfDocument
-import com.itextpdf.kernel.pdf.PdfWriter
 import hu.reelee81.pdflabelprinting.core.NupConfig
 import hu.reelee81.pdflabelprinting.core.PageGroups
 import hu.reelee81.pdflabelprinting.core.PdfCropRect
@@ -10,6 +9,7 @@ import hu.reelee81.pdflabelprinting.core.ProgressMath
 import hu.reelee81.pdflabelprinting.core.ProgressNotifyPacing
 import hu.reelee81.pdflabelprinting.core.ProgressTicker
 import hu.reelee81.pdflabelprinting.core.SourcePageArrays
+import hu.reelee81.pdflabelprinting.core.SourcePartPlan
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
@@ -106,14 +106,15 @@ class PdfImportOperation(
                         position = SourcePageArrays.positionsSized(position, grownTotal, input.defaultPosition)
                     }
 
-                    val total = PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages }
+                    val source = PdfSourceParts.open(files.sourceDir)
+                    val total = source.total
                     rotation = SourcePageArrays.rotationsSized(rotation, total)
                     position = SourcePageArrays.positionsSized(position, total, input.defaultPosition)
 
                     val work = File(files.workDir, "${files.plp.name}.part")
                     if (work.exists()) work.delete()
-                    PdfNupBuilder.build(
-                        source = files.source,
+                    val pageSizes = PdfNupBuilder.build(
+                        source = source,
                         totalSrcPages = total,
                         outFile = work,
                         workDir = files.workDir,
@@ -127,8 +128,6 @@ class PdfImportOperation(
                     )
                     if (files.plp.exists()) files.plp.delete()
                     work.renameTo(files.plp)
-
-                    val pageSizes = PdfPageSizes.forThumbnails(files.source, total, input.config, input.batchSize, tracker::stage)
 
                     val per = max(1, min(100, input.config.rows)) * max(1, min(100, input.config.cols))
                     val selected = if (selectedPages.isNotEmpty()) {
@@ -193,51 +192,19 @@ class PdfImportOperation(
     }
 
     private fun append(srcPdfs: List<File>, password: ByteArray?, tracker: ProgressTracker) {
-        val outWork = files.sourceWork
-        if (outWork.exists()) outWork.delete()
-
-        val pageBatch = input.batchSize
-
-        fun totalPagesOf(path: String, pw: ByteArray?): Int =
-            PdfDocument(PdfIo.reader(path, pw)).use { it.numberOfPages }
-
-        val inputs = buildList {
-            if (files.source.exists()) add(files.source.absolutePath to null)
-            for (srcPdf in srcPdfs) add(srcPdf.absolutePath to password)
-        }.map { (path, pw) -> Triple(path, pw, totalPagesOf(path, pw)) }
-        val allPages = inputs.sumOf { it.third }
+        val source = if (PdfSourceParts.exists(files.sourceDir)) PdfSourceParts.open(files.sourceDir) else PdfSourceParts.empty(files.sourceDir)
+        val pages = srcPdfs.map { file -> PdfDocument(PdfIo.reader(file.absolutePath, password)).use { it.numberOfPages } }
+        val pieces = pages.mapIndexedNotNull { index, count -> if (count > 0) SourcePartPlan.Piece.Incoming(index, 0, count - 1) else null }
+        val plan = SourcePartPlan.append(source.layout, pieces)
         val per = (input.config.rows * input.config.cols).coerceAtLeast(1)
-        val stage = tracker.stage(allPages + ProgressMath.layoutUnits(allPages, per))
+        val stage = tracker.stage(plan.writtenPages + ProgressMath.layoutUnits(source.total + pages.sum(), per))
 
-        PdfDocument(PdfWriter(outWork.absolutePath, PdfIo.writerProperties())).use { dest ->
-            dest.setFlushUnusedObjects(true)
-
-            fun copyInBatches(inputPath: String, pw: ByteArray?, total: Int) {
-                var from = 1
-                while (from <= total) {
-                    val to = min(from + pageBatch - 1, total)
-
-                    PdfDocument(PdfIo.reader(inputPath, pw)).use { src ->
-                        src.copyPagesTo(from, to, dest, PdfVisibleAppearanceCopier(files.workDir))
-                        runCatching { PdfCopySupport.flushCopiedObjects(dest, src) }
-                    }
-
-                    val added = to - from + 1
-                    for (i in 0 until added) {
-                        val p = dest.numberOfPages - i
-                        if (p >= 1) runCatching { dest.getPage(p).flush() }
-                    }
-                    stage.advance(added)
-                    from = to + 1
-                }
-            }
-
-            for ((path, pw, total) in inputs) copyInBatches(path, pw, total)
-            stage.idle()
-        }
-
-        if (files.source.exists()) files.source.delete()
-        outWork.renameTo(files.source)
+        source.write(
+            plan,
+            input.batchSize,
+            stage,
+            PdfSourceParts.Inputs(incoming = srcPdfs.map { PdfSourceParts.Incoming(it, password) }, copierDir = files.workDir)
+        )
     }
 
     suspend fun restoreIfBackedUp() {
@@ -248,8 +215,8 @@ class PdfImportOperation(
     }
 
     private fun sourcePageCount(): Int {
-        if (!files.source.exists()) return 0
-        return try { PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages } } catch (_: Exception) { 0 }
+        if (!PdfSourceParts.exists(files.sourceDir)) return 0
+        return try { PdfSourceParts.open(files.sourceDir).total } catch (_: Exception) { 0 }
     }
 
     companion object {

@@ -8,7 +8,6 @@ import hu.reelee81.pdflabelprinting.core.ProgressNotifyPacing
 import hu.reelee81.pdflabelprinting.core.ProgressTicker
 import hu.reelee81.pdflabelprinting.core.SourcePageArrays
 import java.io.File
-import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +21,6 @@ class PdfViewerEditOperation(
     private val input: Input,
     private val progress: PdfLayoutChangeOperation.Progress,
     private val copyEdited: (File) -> Unit,
-    private val missingSourceMessage: String,
     private val warn: (message: String, error: Throwable) -> Unit = { _, _ -> }
 ) {
     class Input(
@@ -44,7 +42,6 @@ class PdfViewerEditOperation(
         val job = coroutineContext[Job]
 
         val work = File(files.workDir, "${files.plp.name}.edited")
-        val projectedSource = File(files.workDir, "${files.source.name}.edited")
         try {
             ProgressTicker.run(
                 tick = progress.tickMs.milliseconds,
@@ -62,41 +59,40 @@ class PdfViewerEditOperation(
 
                 try {
                     if (work.exists()) work.delete()
-                    if (projectedSource.exists()) projectedSource.delete()
 
                     copyEdited(work)
 
                     val editedPages = PdfDocument(PdfIo.reader(work.absolutePath)).use { it.numberOfPages }
-                    val sourcePages = sourcePageCount()
+                    val source = readableSource()
+                    val sourcePages = source.total
                     val per = (input.config.rows * input.config.cols).coerceAtLeast(1)
-                    val stage = tracker.stage(editedPages + sourcePages + ProgressMath.layoutUnits(sourcePages, per))
+                    val layoutUnits = ProgressMath.layoutUnits(sourcePages, per)
+                    val stage = tracker.stage(editedPages + sourcePages + layoutUnits)
 
                     val projected = try {
                         PdfEditProjection.project(
-                            source = files.source,
+                            source = source,
                             editedPlp = work,
-                            output = projectedSource,
                             batchSize = input.batchSize,
-                            onProgress = stage::advance
+                            onProgress = stage::advance,
+                            writeStage = { pages -> tracker.stage(pages + layoutUnits) }
                         ) { job?.ensureActive() }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: PdfEditProjection.NotProjectableException) {
-                        -1
+                        null
                     }
                     stage.idle()
 
-                    if (projected > 0) {
-                        if (files.source.exists()) files.source.delete()
-                        if (!projectedSource.renameTo(files.source)) throw IOException(missingSourceMessage)
-                        rebuilt(tracker)
+                    if (projected != null && projected.changed > 0) {
+                        rebuilt(tracker, projected.source)
                     } else {
-                        if (projected < 0) {
+                        if (projected == null) {
                             if (files.plp.exists()) files.plp.delete()
                             if (!work.renameTo(files.plp)) work.copyTo(files.plp, overwrite = true)
                         }
                         val sizesConfig = input.builtConfig ?: input.config
-                        val pageSizes = PdfPageSizes.forThumbnails(files.source, sourcePages, sizesConfig, input.batchSize, tracker::stage)
+                        val pageSizes = PdfPageSizes.forThumbnails(source, sourcePages, sizesConfig, input.batchSize, tracker::stage)
                         PdfLayoutChangeOperation.Result(
                             input.crops, input.rotation, input.position, input.defaultPosition, input.builtConfig,
                             input.selected, tracker.snapshot(), pageSizes
@@ -112,7 +108,6 @@ class PdfViewerEditOperation(
             }
         } finally {
             runCatching { work.delete() }
-            runCatching { projectedSource.delete() }
             runCatching {
                 files.workDir.listFiles()?.forEach { f ->
                     if (f.name.startsWith("edited_") || f.name.startsWith("flattened_")) f.delete()
@@ -121,15 +116,15 @@ class PdfViewerEditOperation(
         }
     }
 
-    private fun rebuilt(tracker: ProgressTracker): PdfLayoutChangeOperation.Result {
-        val total = PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages }
+    private fun rebuilt(tracker: ProgressTracker, source: PdfSourceParts): PdfLayoutChangeOperation.Result {
+        val total = source.total
         val rotation = SourcePageArrays.rotationsSized(input.rotation, total)
         val position = SourcePageArrays.positionsSized(input.position, total, input.defaultPosition)
 
         val work = File(files.workDir, "${files.plp.name}.part")
         if (work.exists()) work.delete()
-        PdfNupBuilder.build(
-            source = files.source,
+        val pageSizes = PdfNupBuilder.build(
+            source = source,
             totalSrcPages = total,
             outFile = work,
             workDir = files.workDir,
@@ -144,7 +139,6 @@ class PdfViewerEditOperation(
         if (files.plp.exists()) files.plp.delete()
         work.renameTo(files.plp)
 
-        val pageSizes = PdfPageSizes.forThumbnails(files.source, total, input.config, input.batchSize, tracker::stage)
         return PdfLayoutChangeOperation.Result(
             input.crops, rotation, position, input.defaultPosition, input.config,
             input.selected, tracker.snapshot(), pageSizes
@@ -158,8 +152,8 @@ class PdfViewerEditOperation(
         }
     }
 
-    private fun sourcePageCount(): Int {
-        if (!files.source.exists()) return 0
-        return try { PdfDocument(PdfIo.reader(files.source.absolutePath)).use { it.numberOfPages } } catch (_: Exception) { 0 }
+    private fun readableSource(): PdfSourceParts {
+        if (!PdfSourceParts.exists(files.sourceDir)) return PdfSourceParts.empty(files.sourceDir)
+        return try { PdfSourceParts.open(files.sourceDir) } catch (_: Exception) { PdfSourceParts.empty(files.sourceDir) }
     }
 }

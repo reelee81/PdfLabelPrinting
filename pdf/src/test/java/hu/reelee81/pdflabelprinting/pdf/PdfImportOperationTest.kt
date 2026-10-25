@@ -61,10 +61,9 @@ class PdfImportOperationTest {
         assertEquals(crops, result.crops)
         assertEquals(config, result.config)
         assertEquals(3, pageCount(plp()))
-        assertEquals(3, pageCount(File(dir, "source_temp_copy.pdf")))
+        assertEquals(3, pageCount(File(dir, "source_temp_copy/0001.pdf")))
         assertEquals("old layout", File(dir, "plp_temp_copy.pdf").readText())
         assertFalse(imported.exists())
-        assertFalse(File(dir, "source_temp_work.pdf").exists())
         assertFalse(File(dir, "plp_temp.pdf.part").exists())
         assertNull(result.pageSizes)
         assertEquals(listOf("selection saved"), events)
@@ -103,7 +102,7 @@ class PdfImportOperationTest {
         assertArrayEquals(intArrayOf(5, 5, 5), result.position)
         assertEquals(emptyList<Int>(), result.selected)
         assertEquals(2, pageCount(plp()))
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
     }
 
     @Test
@@ -124,6 +123,24 @@ class PdfImportOperationTest {
             assertFalse(first.exists())
             assertFalse(second.exists())
         }
+    }
+
+    @Test
+    fun importsAfterAFullPartGoIntoANewPartAndLeaveTheFullOneUntouched() {
+        writeMarked(source(), 1000, firstWidth = 200f)
+        val full = source().readBytes()
+
+        for ((round, entry) in listOf(300f to 2, 400f to 1).withIndex()) {
+            val imported = writeMarked(File(dir, "${round}_in.pdf"), entry.second, firstWidth = entry.first)
+            runBlocking {
+                operation(listOf(PdfImportOperation.Source(imported, null, null)), config = singleUp, batchSize = 50).execute {}
+            }
+        }
+
+        assertEquals(listOf("0001.pdf", "0002.pdf"), sourceDir().list()!!.sorted())
+        assertArrayEquals(full, source().readBytes())
+        assertEquals(listOf(300f, 301f, 400f), pageWidths(File(sourceDir(), "0002.pdf")))
+        assertEquals(1003, pageCount(plp()))
     }
 
     @Test
@@ -201,7 +218,7 @@ class PdfImportOperationTest {
         assertEquals("old layout", plp().readText())
         assertFalse(good.exists())
         assertFalse(broken.exists())
-        assertFalse(File(dir, "source_temp_copy.pdf").exists())
+        assertFalse(File(dir, "source_temp_copy").exists())
         assertFalse(File(dir, "plp_temp_copy.pdf").exists())
 
         runBlocking { operation.restoreIfBackedUp() }
@@ -225,7 +242,7 @@ class PdfImportOperationTest {
         runBlocking { operation.restoreIfBackedUp() }
         assertEquals(listOf(200f, 201f), pageWidths(source()))
         assertEquals("old layout", plp().readText())
-        assertTrue(dir.listFiles().orEmpty().all { it == source() || it == plp() })
+        assertTrue(dir.listFiles().orEmpty().all { it == sourceDir() || it == plp() })
     }
 
     @Test
@@ -253,11 +270,14 @@ class PdfImportOperationTest {
         assertNotNull(brokenProbe.failure)
     }
 
-    private fun source() = File(dir, "source_temp.pdf")
+    private fun sourceDir() = File(dir, "source_temp")
+
+    private fun source() = File(sourceDir(), "0001.pdf")
 
     private fun plp() = File(dir, "plp_temp.pdf")
 
     private fun writeMarked(file: File, pages: Int, firstWidth: Float): File {
+        file.parentFile?.mkdirs()
         PdfDocument(PdfWriter(file)).use { pdf ->
             repeat(pages) { index ->
                 val page = pdf.addNewPage(PageSize(firstWidth + index, 300f))
@@ -300,10 +320,9 @@ class PdfImportOperationTest {
     ) = PdfImportOperation(
         files = PdfLayoutChangeOperation.Files(
             dir,
-            source(),
+            sourceDir(),
             plp(),
-            WorkFileBackup(dir, "source_temp.pdf", "plp_temp.pdf", "source_temp_copy.pdf", "plp_temp_copy.pdf"),
-            File(dir, "source_temp_work.pdf")
+            WorkFileBackup(dir, "source_temp", "plp_temp.pdf", "source_temp_copy", "plp_temp_copy.pdf")
         ),
         saveSelection = { events += "selection saved" },
         input = PdfImportOperation.Input(

@@ -4,7 +4,6 @@ import com.itextpdf.kernel.geom.PageSize
 import com.itextpdf.kernel.pdf.PdfDocument
 import hu.reelee81.pdflabelprinting.core.NupConfig
 import hu.reelee81.pdflabelprinting.core.PageSizes
-import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 
@@ -31,7 +30,7 @@ object PdfPageSizes {
     }
 
     fun forThumbnails(
-        source: File,
+        source: PdfSourceParts,
         totalPages: Int,
         config: NupConfig,
         batchSize: Int,
@@ -43,7 +42,7 @@ object PdfPageSizes {
     }
 
     fun read(
-        source: File,
+        source: PdfSourceParts,
         totalPages: Int,
         batchSize: Int,
         fallbackW: Float,
@@ -56,28 +55,29 @@ object PdfPageSizes {
         var startPage = 0
         while (startPage < totalPages) {
             val endExclusive = min(totalPages, startPage + batchSize)
+            val lastPageToRead = min(endExclusive, source.total)
 
-            val pdfDoc = PdfDocument(PdfIo.reader(source.absolutePath))
-            try {
-                val srcPageCount = pdfDoc.numberOfPages
-                val lastPageToRead = min(endExclusive, srcPageCount)
+            for ((part, first, last) in source.layout.runs(startPage, lastPageToRead - 1)) {
+                val partStart = source.layout.start(part)
+                val pdfDoc = PdfDocument(PdfIo.reader(source.file(part).absolutePath))
+                try {
+                    for (local in first..last) {
+                        val pageZeroBased = partStart + local
+                        runCatching {
+                            val page = pdfDoc.getPage(local + 1)
 
-                for (pageZeroBased in startPage until lastPageToRead) {
-                    val pageIndex1Based = pageZeroBased + 1
-                    runCatching {
-                        val page = pdfDoc.getPage(pageIndex1Based)
+                            val box = page.cropBox ?: page.mediaBox
+                            val w = box.width
+                            val h = box.height
 
-                        val box = page.cropBox ?: page.mediaBox
-                        val w = box.width
-                        val h = box.height
-
-                        widths[pageZeroBased] = w
-                        heights[pageZeroBased] = h
-                    }.onFailure {
+                            widths[pageZeroBased] = w
+                            heights[pageZeroBased] = h
+                        }.onFailure {
+                        }
                     }
+                } finally {
+                    runCatching { pdfDoc.close() }
                 }
-            } finally {
-                runCatching { pdfDoc.close() }
             }
 
             progress.advance(endExclusive - startPage)

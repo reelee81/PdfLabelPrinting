@@ -58,7 +58,7 @@ class PdfEditProjectionTest {
             val plp = buildPlp(source)
             val edited = edit(plp, "EDIT $round", 150f, 120f + round * 20f)
             val projected = temporary.newFile("source_$round.pdf")
-            val changed = PdfEditProjection.project(source, edited, projected, batchSize = 1) {}
+            val changed = projectFile(source, edited, projected)
             assertEquals(1, changed)
             source = projected
             val depth = maxDepth(buildPlp(source))
@@ -104,7 +104,7 @@ class PdfEditProjectionTest {
         assertTrue(textPositions(cleared, 2).containsKey("SECOND PAGE EDIT"))
 
         val projected = temporary.newFile()
-        assertEquals(1, PdfEditProjection.project(source, cleared, projected, batchSize = 1) {})
+        assertEquals(1, projectFile(source, cleared, projected))
         PdfDocument(PdfReader(projected)).use { pdf ->
             val first = pdf.getPage(1)
             assertNull(layerForm(first))
@@ -129,7 +129,7 @@ class PdfEditProjectionTest {
         assertFalse(hasLayers(cleared, null))
         val edited = edit(cleared, "NEW ONE", 150f, 200f)
         val projected = temporary.newFile()
-        assertEquals(2, PdfEditProjection.project(source, edited, projected, batchSize = 1) {})
+        assertEquals(2, projectFile(source, edited, projected))
 
         val finalPlp = buildPlp(projected)
         val first = textPositions(finalPlp, 1)
@@ -149,7 +149,7 @@ class PdfEditProjectionTest {
         assertFalse(hasLayers(buildPlp(source), null))
         val cleared = temporary.newFile()
         assertEquals(0, PdfEditProjection.clearLayers(buildPlp(source), cleared, null, batchSize = 1) {})
-        assertEquals(0, PdfEditProjection.project(source, cleared, temporary.newFile(), batchSize = 1) {})
+        assertEquals(0, projectFile(source, cleared, temporary.newFile()))
     }
 
     @Test
@@ -171,7 +171,7 @@ class PdfEditProjectionTest {
         }
 
         val projected = temporary.newFile()
-        assertEquals(1, PdfEditProjection.project(source, cleared, projected, batchSize = 1) {})
+        assertEquals(1, projectFile(source, cleared, projected))
         PdfDocument(PdfReader(projected)).use { pdf ->
             assertNull(layerForm(pdf.getPage(1)))
             assertNotNull(layerForm(pdf.getPage(2)))
@@ -191,13 +191,49 @@ class PdfEditProjectionTest {
         assertTrue(textPositions(cleared, 1).containsKey("EDIT"))
     }
 
+    @Test
+    fun anEditInOnePartRewritesOnlyThatPart() {
+        val whole = makeSource(4)
+        val parts = temporary.newFolder()
+        PdfDocument(PdfReader(whole)).use { src ->
+            for ((index, range) in listOf(1..2, 3..4).withIndex()) {
+                PdfDocument(PdfWriter(File(parts, "000${index + 1}.pdf"))).use { out -> src.copyPagesTo(range.first, range.last, out) }
+            }
+        }
+        val untouched = File(parts, "0001.pdf").readBytes()
+        val edited = edit(buildPlp(whole), "THIRD PAGE EDIT", 150f, 200f, 3)
+
+        val result = PdfEditProjection.project(PdfSourceParts.open(parts), edited, batchSize = 1, writeStage = { NoProgress }) {}
+
+        assertEquals(1, result.changed)
+        assertEquals(listOf(2, 2), result.source.layout.pageCounts)
+        assertArrayEquals(untouched, File(parts, "0001.pdf").readBytes())
+        PdfDocument(PdfReader(File(parts, "0002.pdf"))).use { pdf ->
+            assertNotNull(layerForm(pdf.getPage(1)))
+            assertNull(layerForm(pdf.getPage(2)))
+        }
+    }
+
+    private fun projectFile(source: File, edited: File, output: File): Int {
+        val parts = temporary.newFolder()
+        source.copyTo(File(parts, "0001.pdf"))
+        val result = PdfEditProjection.project(PdfSourceParts.open(parts), edited, batchSize = 1, writeStage = { NoProgress }) {}
+        if (result.changed > 0) result.source.file(0).copyTo(output, overwrite = true)
+        return result.changed
+    }
+
+    private object NoProgress : PdfProgress {
+        override fun advance(units: Int) = Unit
+        override fun idle() = Unit
+    }
+
     private fun hasLayers(file: File, pages: Set<Int>?): Boolean =
         PdfEditProjection.hasLayers({ PdfReader(file) }, pages, batchSize = 1) {}
 
     private fun projectEdit(source: File, text: String, pageNumber: Int): File {
         val edited = edit(buildPlp(source), text, 150f, 200f, pageNumber)
         val projected = temporary.newFile()
-        PdfEditProjection.project(source, edited, projected, batchSize = 1) {}
+        projectFile(source, edited, projected)
         return projected
     }
 
@@ -206,7 +242,7 @@ class PdfEditProjectionTest {
         val source = makeSource(1)
         val plp = buildPlp(source)
         val output = temporary.newFile("unchanged.pdf")
-        assertEquals(0, PdfEditProjection.project(source, plp, output, batchSize = 1) {})
+        assertEquals(0, projectFile(source, plp, output))
     }
 
     @Test
@@ -241,7 +277,7 @@ class PdfEditProjectionTest {
 
     private fun assertNotProjectable(source: File, plp: File) {
         try {
-            PdfEditProjection.project(source, plp, temporary.newFile(), batchSize = 1) {}
+            projectFile(source, plp, temporary.newFile())
             fail("expected NotProjectableException")
         } catch (_: PdfEditProjection.NotProjectableException) {
         }
@@ -273,7 +309,7 @@ class PdfEditProjectionTest {
         assertTrue(textPositions(plp, 1).containsKey("SAVED EDIT"))
         assertFalse(hasLayers(plp, null))
         assertEquals(0, PdfEditProjection.clearLayers(plp, temporary.newFile(), null, batchSize = 1) {})
-        assertEquals(0, PdfEditProjection.project(reloaded, plp, temporary.newFile(), batchSize = 1) {})
+        assertEquals(0, projectFile(reloaded, plp, temporary.newFile()))
 
         val newEdit = projectEdit(reloaded, "NEW EDIT", 1)
         val cleared = temporary.newFile()
